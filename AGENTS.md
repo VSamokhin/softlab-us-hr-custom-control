@@ -98,7 +98,8 @@ project decision and a separate safety design.
 - Windows control goes through the official TEAC driver's private control
   file and vendor-request IOCTL (see `docs/protocol.md`). Never install,
   replace, or rebind drivers from this project. Do not publish Windows release
-  packages until that backend has been validated with real hardware. CI builds and
+  packages until that backend's writes have been validated with real hardware
+  (status reads were validated on Windows 11 with the TASCAM driver). CI builds and
   tests Windows and uploads a `windows-preview-x64` artifact; keep its name
   outside the `release-candidate-*` pattern used by the release workflow.
 - When adding dependencies, prefer portable Rust crates, avoid wildcard

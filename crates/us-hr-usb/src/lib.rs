@@ -801,15 +801,29 @@ mod teac {
                 return Ok(None);
             }
         };
-        let Some(interface) = interfaces.into_iter().next() else {
+        // The in-box usbaudio2 driver registers the same render interface but
+        // has no control file, so a missing file means "not the TEAC driver".
+        let mut opened = None;
+        for interface in interfaces {
+            match ControlFile::open(&interface.control_path) {
+                Ok(file) => {
+                    opened = Some((interface, file));
+                    break;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    tracing::debug!(path = %interface.control_path, "no TASCAM driver control file");
+                }
+                Err(source) => {
+                    return Err(UsbError::OpenDriverControl {
+                        device: interface.model.display_name(),
+                        source,
+                    });
+                }
+            }
+        }
+        let Some((interface, file)) = opened else {
             return Ok(None);
         };
-        let file = ControlFile::open(&interface.control_path).map_err(|source| {
-            UsbError::OpenDriverControl {
-                device: interface.model.display_name(),
-                source,
-            }
-        })?;
         let info = discover()
             .ok()
             .and_then(|devices| {

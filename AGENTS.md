@@ -17,8 +17,10 @@ project decision and a separate safety design.
 
 - `crates/us-hr-core`: platform-independent device models, settings, status
   types, and the USB message codec. Keep this crate free of USB and GUI code.
-- `crates/us-hr-usb`: libusb transport, discovery, protocol queries, setting
-  writes, and read-back verification.
+- `crates/us-hr-usb`: discovery, the backend-neutral `Transport<C:
+  ControlChannel>` protocol layer (queries, setting writes, read-back
+  verification), and the libusb `ControlChannel`. New platform backends
+  implement `ControlChannel` only; do not duplicate protocol logic.
 - `apps/us-hr-cli`: read-only diagnostics and explicitly requested, scriptable
   setting changes.
 - `apps/us-hr-control`: egui/eframe desktop application, undo history, presets,
@@ -26,7 +28,9 @@ project decision and a separate safety design.
 - `docs/protocol.md`: source of truth for reverse-engineered command mappings,
   conversions, supported devices, and platform limitations.
 - `packaging`: platform integration and release packaging assets.
-- `.github/workflows`: macOS arm64 and Linux x64 CI/release jobs.
+- `.github/workflows`: macOS arm64 and Linux x64 CI/release jobs, plus a
+  Windows x64 build/test job whose preview artifact is never released.
+- `packaging/windows`: Windows icon and the read-only driver diagnostics script.
 
 ## Invariants and device safety
 
@@ -84,9 +88,11 @@ project decision and a separate safety design.
 - Keep both Wayland and X11 support enabled for Linux GUI builds.
 - Do not replace or rebind the Windows audio driver. ASIO buffer sizing belongs
   to the vendor driver and is not a portable device setting.
-- Do not build or publish Windows packages until a dedicated backend can access
+- Do not publish Windows release packages until a dedicated backend can access
   vendor controls without replacing the audio driver. Descriptor discovery was
-  validated on Windows, but control-path access is not functional.
+  validated on Windows, but control-path access is not functional. CI builds and
+  tests Windows and uploads a `windows-preview-x64` artifact; keep its name
+  outside the `release-candidate-*` pattern used by the release workflow.
 - When adding dependencies, prefer portable Rust crates, avoid wildcard
   versions, update `Cargo.lock`, and ensure the license/source policy in
   `deny.toml` still passes.
@@ -125,6 +131,8 @@ When workflow or shell files change, also run:
 actionlint .github/workflows/*.yml
 shellcheck packaging/macos/bundle.sh
 ```
+
+CI also parses `packaging/windows/collect-driver-info.ps1` with PowerShell.
 
 If a required external checker is unavailable, say so explicitly instead of
 claiming it passed. Keep the working tree free of generated build artifacts;

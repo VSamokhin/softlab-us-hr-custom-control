@@ -104,6 +104,52 @@ jobs:
           retention-days: 14
           path: dist/us-hr-custom-control-${{ matrix.artifact }}.${{ matrix.archive }}
 
+  windows:
+    name: Windows x64 build and test
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.99.0
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - run: cargo test --workspace --all-features --locked
+      - run: cargo build --workspace --release --locked
+      - name: Check PowerShell script syntax
+        shell: pwsh
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            "packaging/windows/collect-driver-info.ps1", [ref]$null, [ref]$errors) | Out-Null
+          if ($errors) { $errors | ForEach-Object { Write-Error $_.Message }; exit 1 }
+      # Windows device control is not functional yet, so this preview is a CI
+      # artifact only. Its name deliberately does not match the
+      # release-candidate-* pattern that the release workflow publishes.
+      - name: Package Windows preview build
+        if: github.event_name == 'push'
+        shell: pwsh
+        run: |
+          $packageName = "us-hr-custom-control-Windows-x64-preview"
+          $packageDir = Join-Path "dist" $packageName
+          New-Item -ItemType Directory -Force -Path $packageDir | Out-Null
+          Copy-Item "target/release/us-hr-control.exe" $packageDir
+          Copy-Item "target/release/us-hr-cli.exe" $packageDir
+          Copy-Item "packaging/windows/collect-driver-info.ps1" $packageDir
+          Copy-Item "README.md" $packageDir
+          Copy-Item "LICENSE" $packageDir
+          Compress-Archive -Path $packageDir -DestinationPath "dist/$packageName.zip"
+      - name: Upload Windows preview build
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-preview-x64
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+          path: dist/us-hr-custom-control-Windows-x64-preview.zip
+
   dependencies:
     name: Dependency policy
     runs-on: ubuntu-24.04

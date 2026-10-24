@@ -1,3 +1,7 @@
+// Release builds are GUI applications on Windows; debug builds keep a console
+// for diagnostics.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 mod history;
 mod presets;
 mod theme;
@@ -16,6 +20,13 @@ const UNDO_CAPACITY: usize = 50;
 const DEVICE_MONITOR_REPAINT_INTERVAL: Duration = Duration::from_millis(250);
 const CONNECTION_RETRY_INTERVAL: Duration = Duration::from_secs(1);
 const CONNECTION_RETRY_LIMIT: u8 = 5;
+
+#[cfg(windows)]
+const DETECTED_WITHOUT_CONTROL: &str = "The interface was found, but Windows does not yet expose \
+     its control path to this application. See the README's Windows section.";
+#[cfg(not(windows))]
+const DETECTED_WITHOUT_CONTROL: &str =
+    "The interface was found, but its control state could not be read.";
 
 fn main() -> eframe::Result {
     let mut viewport = egui::ViewportBuilder::default()
@@ -529,11 +540,7 @@ fn status_bar(ui: &mut egui::Ui, app: &ControlApp) {
             theme::TEXT_MUTED,
         )
     } else {
-        (
-            "ATTENTION",
-            "The interface was found, but its control state could not be read.",
-            theme::ERROR,
-        )
+        ("ATTENTION", DETECTED_WITHOUT_CONTROL, theme::ERROR)
     };
 
     ui.horizontal(|ui| {

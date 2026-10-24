@@ -7,7 +7,8 @@ status queries and setting changes.
 The project does **not** replace an audio driver. It controls the interface's
 internal mixer and device settings over vendor-specific USB control transfers.
 macOS and Linux use their standard USB-audio stacks. Windows control is not
-supported, so Windows binaries are not built or published.
+supported yet: CI builds and tests Windows as a preview artifact, but no
+Windows release package is published.
 
 The reverse-engineering findings and command map are documented in
 [`docs/protocol.md`](docs/protocol.md).
@@ -31,7 +32,7 @@ The reverse-engineering findings and command map are documented in
   been tested and must not be assumed to be compatible.
 - macOS arm64 is the only platform tested at runtime with real hardware. The
   Linux x64 build compiles in CI, but has not been runtime-tested or
-  hardware-validated. Windows builds are disabled because the available USB
+  hardware-validated. Windows releases are disabled because the available USB
   backend cannot open the device control path without replacing the audio
   driver.
 
@@ -112,7 +113,7 @@ macOS application bundle.
 Enter a name under **Presets** and choose **Save current** to store the latest
 verified device state. Choose a preset and select **Apply and verify** to write
 the complete snapshot and confirm it through hardware read-back. **Cmd+Z** on
-macOS or **Ctrl+Z** on Linux restores the previous verified state
+macOS or **Ctrl+Z** on Linux and Windows restores the previous verified state
 from the current application session. Up to 50 states are retained; preset
 application creates one undo step rather than one step per setting. The history
 is cleared when the connected device set changes.
@@ -132,10 +133,11 @@ tag rather than making the device world-writable.
 
 ### Windows
 
-Windows builds and release packages are disabled because the application cannot
-open the device control path with the normal Windows audio driver. The source
-may still compile on Windows, but that does not provide a functional control
-application.
+Windows control is not functional yet, so no Windows release package is
+published. CI builds, lints, and tests the workspace on Windows x64 and uploads
+the result as a `windows-preview-x64` workflow artifact for development and
+diagnostics only. The preview release executable is a windowed application
+with the embedded application icon; debug builds keep a console for logs.
 
 The Windows x64 build has been launched with a connected US-1x2HR using the
 built-in Windows USB Audio 2 driver. Device-descriptor discovery succeeds, but
@@ -146,20 +148,34 @@ the interface as detected but cannot read or change its control state.
 Do not replace the audio function or composite parent with a generic WinUSB
 driver: doing so would prevent Windows from using the interface for audio.
 Windows control support needs a dedicated backend that can coexist with the
-TASCAM audio driver. Installing the official TASCAM package provides its own
-driver and Settings Panel, but compatibility with that driver's private control
+TASCAM audio driver. The protocol layer accepts any `ControlChannel`
+implementation, so such a backend only has to carry the 64-byte vendor messages;
+readiness polling, write policy, and read-back verification are shared with
+macOS and Linux. Installing the official TASCAM package provides its own driver
+and Settings Panel, but compatibility with that driver's private control
 interface has not yet been implemented in this project.
+
+To help that work, `packaging/windows/collect-driver-info.ps1` reports the
+drivers, device interfaces, and TASCAM software associated with a connected
+interface. It only reads device properties and the registry:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File packaging\windows\collect-driver-info.ps1 > us-hr-driver-info.txt
+```
 
 ## Structure
 
 - `crates/us-hr-core`: platform-independent model and message codec.
-- `crates/us-hr-usb`: libusb transport and typed US-HR operations.
+- `crates/us-hr-usb`: backend-neutral protocol transport, the libusb control
+  channel, and typed US-HR operations.
 - `apps/us-hr-cli`: diagnostics and scriptable settings.
 - `apps/us-hr-control`: native desktop UI using egui/eframe.
 
 CI treats warnings as errors, verifies the declared Rust 1.85 minimum, checks
 formatting, runs unit/property tests and dependency policy checks, and compiles
-separate macOS arm64 and Linux x64 builds. Tagged releases upload each supported
+separate macOS arm64 and Linux x64 builds. A Windows x64 job builds, lints,
+and tests the workspace and uploads a preview artifact that is never attached
+to a release. Tagged releases upload each supported
 platform build as its own artifact.
 
 ### Creating a release

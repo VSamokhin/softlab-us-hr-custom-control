@@ -7,8 +7,7 @@ status queries and setting changes.
 The project does **not** replace an audio driver. It controls the interface's
 internal mixer and device settings over vendor-specific USB control transfers.
 macOS and Linux use their standard USB-audio stacks. Windows control goes
-through the official TASCAM driver; it is hardware-validated, but CI builds
-Windows only as a preview artifact for now.
+through the official TASCAM driver, which must be installed first.
 
 The reverse-engineering findings and command map are documented in
 [`docs/protocol.md`](docs/protocol.md).
@@ -33,8 +32,7 @@ The reverse-engineering findings and command map are documented in
 - macOS arm64 is the only platform tested at runtime with real hardware. The
   Linux x64 build compiles in CI, but has not been runtime-tested or
   hardware-validated. Windows 11 x64 with the TASCAM driver has been tested
-  with real hardware (status reads and one verified write); Windows release
-  packages are not published yet.
+  with real hardware (status reads and one verified write).
 
 Firmware updating is intentionally out of scope until the ordinary settings
 protocol is complete and thoroughly tested.
@@ -150,10 +148,12 @@ documented in [`docs/protocol.md`](docs/protocol.md#windows-transport).
 With the TASCAM driver installed on Windows 11 x64, the CLI and the GUI read the
 complete device state of a US-1x2HR, and a verified write (reapplying broadcast
 volume 70) succeeded. Changing a setting to a different value has not yet been
-tested on Windows, and no Windows release package is published yet. CI builds, lints, and tests the
-workspace on Windows x64 and uploads a `windows-preview-x64` workflow artifact.
-The preview release executable is a windowed application with the embedded
-application icon; debug builds keep a console for logs.
+tested on Windows.
+
+The Windows x64 release package contains `us-hr-control.exe` (a windowed
+application with the embedded icon), `us-hr-cli.exe`, and the diagnostics
+script. Install the TASCAM driver before running them. Debug builds keep a
+console for logs.
 
 Do not replace the audio function or composite parent with a generic WinUSB
 driver: doing so would prevent Windows from using the interface for audio.
@@ -178,9 +178,8 @@ powershell -ExecutionPolicy Bypass -File packaging\windows\collect-driver-info.p
 
 CI treats warnings as errors, verifies the declared Rust 1.85 minimum, checks
 formatting, runs unit/property tests and dependency policy checks, and compiles
-separate macOS arm64 and Linux x64 builds. A Windows x64 job builds, lints,
-and tests the workspace and uploads a preview artifact that is never attached
-to a release. Tagged releases upload each supported
+separate macOS arm64, Linux x64, and Windows x64 builds; the Windows job also
+runs Clippy and the tests on Windows. Tagged releases upload each supported
 platform build as its own artifact.
 
 ### Creating a release
@@ -212,7 +211,8 @@ routine. Rerunning a failed release workflow safely reuses a tag that already
 points at the same commit.
 
 Creating or publishing a draft does not imply runtime or hardware validation of
-the Linux package.
+the Linux package. The Windows package has been validated only as described in
+the Windows section and requires the TASCAM driver.
 
 ## Safety
 

@@ -124,14 +124,11 @@ jobs:
           [System.Management.Automation.Language.Parser]::ParseFile(
             "packaging/windows/collect-driver-info.ps1", [ref]$null, [ref]$errors) | Out-Null
           if ($errors) { $errors | ForEach-Object { Write-Error $_.Message }; exit 1 }
-      # Windows device control is not functional yet, so this preview is a CI
-      # artifact only. Its name deliberately does not match the
-      # release-candidate-* pattern that the release workflow publishes.
-      - name: Package Windows preview build
+      - name: Package Windows release candidate
         if: github.event_name == 'push'
         shell: pwsh
         run: |
-          $packageName = "us-hr-custom-control-Windows-x64-preview"
+          $packageName = "us-hr-custom-control-Windows-x64"
           $packageDir = Join-Path "dist" $packageName
           New-Item -ItemType Directory -Force -Path $packageDir | Out-Null
           Copy-Item "target/release/us-hr-control.exe" $packageDir
@@ -140,15 +137,15 @@ jobs:
           Copy-Item "README.md" $packageDir
           Copy-Item "LICENSE" $packageDir
           Compress-Archive -Path $packageDir -DestinationPath "dist/$packageName.zip"
-      - name: Upload Windows preview build
+      - name: Upload release candidate
         if: github.event_name == 'push'
         uses: actions/upload-artifact@v7
         with:
-          name: windows-preview-x64
+          name: release-candidate-Windows-x64
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
-          path: dist/us-hr-custom-control-Windows-x64-preview.zip
+          path: dist/us-hr-custom-control-Windows-x64.zip
 
   dependencies:
     name: Dependency policy

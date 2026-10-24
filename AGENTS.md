@@ -35,8 +35,7 @@ project decision and a separate safety design.
 - `docs/protocol.md`: source of truth for reverse-engineered command mappings,
   conversions, supported devices, and platform limitations.
 - `packaging`: platform integration and release packaging assets.
-- `.github/workflows`: macOS arm64 and Linux x64 CI/release jobs, plus a
-  Windows x64 build/test job whose preview artifact is never released.
+- `.github/workflows`: macOS arm64, Linux x64, and Windows x64 CI/release jobs.
 - `packaging/windows`: Windows icon and the read-only driver diagnostics script.
 
 ## Invariants and device safety
@@ -89,7 +88,8 @@ project decision and a separate safety design.
 
 ## Cross-platform requirements
 
-- Supported build targets are Apple Silicon macOS and 64-bit Linux. Avoid
+- Supported build targets are Apple Silicon macOS, 64-bit Linux, and 64-bit
+  Windows. Avoid
   platform-specific assumptions in `us-hr-core` and `us-hr-usb`. Isolate
   unavoidable platform behavior behind narrow `cfg` blocks.
 - Keep both Wayland and X11 support enabled for Linux GUI builds.
@@ -97,11 +97,10 @@ project decision and a separate safety design.
   to the vendor driver and is not a portable device setting.
 - Windows control goes through the official TEAC driver's private control
   file and vendor-request IOCTL (see `docs/protocol.md`). Never install,
-  replace, or rebind drivers from this project. Do not publish Windows release
-  packages without an explicit project decision (status reads and one verified
-  write were validated on Windows 11 with the TASCAM driver). CI builds and
-  tests Windows and uploads a `windows-preview-x64` artifact; keep its name
-  outside the `release-candidate-*` pattern used by the release workflow.
+  replace, or rebind drivers from this project. Status reads and one verified
+  write were validated on Windows 11 x64 with the TASCAM driver; changing a
+  setting to a different value has not been tested on Windows yet. Windows x64
+  release candidates are packaged like the other platforms.
 - When adding dependencies, prefer portable Rust crates, avoid wildcard
   versions, update `Cargo.lock`, and ensure the license/source policy in
   `deny.toml` still passes.

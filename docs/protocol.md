@@ -120,7 +120,7 @@ panel maps its controls as follows:
   parent to WinUSB would disable audio. Control therefore goes through the TEAC
   driver described under [Windows transport](#windows-transport). Status
   reads and a verified write through that backend were validated on
-  2026-10-24 (see below). Windows release packages remain disabled.
+  2026-10-24 (see below).
 
 The only hardware validation performed to date used a US-1x2HR reporting
 firmware 1.00 build 14. Readback of every modeled setting succeeded, and the

@@ -166,6 +166,8 @@ jobs:
             "us-hr-custom-control-${RELEASE_TAG}-macOS-arm64.tar.gz"
           mv us-hr-custom-control-Linux-x64.tar.gz \
             "us-hr-custom-control-${RELEASE_TAG}-Linux-x64.tar.gz"
+          mv us-hr-custom-control-Windows-x64.zip \
+            "us-hr-custom-control-${RELEASE_TAG}-Windows-x64.zip"
       - name: Create checksums
         working-directory: release-assets
         run: sha256sum ./* > SHA256SUMS

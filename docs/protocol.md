@@ -116,13 +116,76 @@ panel maps its controls as follows:
   using the built-in Windows USB Audio 2 driver. The device enumerated as
   `0644:806f`, but libusb could not open it: the composite parent used
   `usbccgp`, its only function used `usbaudio2`, and neither exposed a
-  libusb-compatible control path. No status query or write was performed.
-  Rebinding the only function or composite parent to WinUSB would disable audio,
-  so functional Windows control requires a dedicated backend that coexists with
-  the TASCAM audio driver. Windows CI builds and release packages are disabled
-  until such a backend exists.
+  libusb-compatible control path. Rebinding the only function or composite
+  parent to WinUSB would disable audio. Control therefore goes through the TEAC
+  driver described under [Windows transport](#windows-transport). Status
+  reads and a verified write through that backend were validated on
+  2026-10-24 (see below).
 
 The only hardware validation performed to date used a US-1x2HR reporting
 firmware 1.00 build 14. Readback of every modeled setting succeeded, and the
 write path was verified by reapplying broadcast volume 77 and reading 77 back.
 No status query or setting change has been tested on a US-2x2HR or US-4x4HR.
+
+## Windows transport
+
+Evidence: offline analysis of the official `TASCAM_US-HR_Installer_1.00.exe`
+(Inno Setup 5.5.7, signed by TEAC Corporation). The installer was unpacked
+without being run; all 33 files matched the installer's stored SHA-1 hashes.
+The findings below come from the driver INF, PE imports and exports, and a
+disassembly of `US-HR_SettingsPanel.exe` 1.0.0.0.
+
+**Hardware validation (2026-10-24):** Windows 11 Pro build 26300 x64,
+US-1x2HR firmware 1.00 build 14 (build date `Sep  2 2020 17:42:40`), with the
+TASCAM Windows 10 driver package installed (`us-1x2hr` service, driver version
+13.49.20.427, 05/18/2020; the composite parent stays on `usbccgp`). The backend
+opened `…{65e8773e-8f56-11d0-a3b9-00a0c9223196}\us-1x2hr`, and `status` read
+the firmware identity, sample rate (44.1 kHz), and every modeled setting
+without errors in about 175 ms; the GUI showed the same state. Readiness
+replies carried field `0xa1` as `u16`. The write path was then verified by
+reapplying broadcast volume 70 (its current value) and reading 70 back; a
+following status matched the earlier one in every field. Because the value did
+not change, this proves the write direction is accepted, not that a different
+value takes effect. The audio endpoints stayed present throughout.
+
+- The package installs TEAC's own AVStream/KMDF driver, `us-1x2hr.sys`
+  1.0.0.0 (INF `uac20.inf`, DriverVer 05/18/2020, 13.49.20.427, for Windows 10, WHCP-signed).
+  It binds to `USB\VID_0644&PID_806F&MI_00`, `…PID_8070&MI_00` and
+  `…PID_8071&MI_00`, replacing `usbaudio2` on the audio function. It is not a
+  Thesycon TUSBAudio driver and ships no vendor API DLL.
+- The driver registers only the standard KS interface classes (AUDIO, RENDER,
+  CAPTURE, TOPOLOGY) with reference string `ksus1x2hr`. Its device SDDL grants
+  read/write to everyone, so no elevation is needed.
+- The Settings Panel imports `SetupDi*`, `CreateFileW` and `DeviceIoControl`
+  directly. It enumerates KSCATEGORY_RENDER
+  `{65E8773E-8F56-11D0-A3B9-00A0C9223196}`, replaces the interface path's
+  reference string with `\us-1x2hr`, and opens that path with
+  `GENERIC_READ | GENERIC_WRITE` and read/write sharing.
+- Every protocol transfer uses IOCTL `0x00222000`
+  (`CTL_CODE(FILE_DEVICE_UNKNOWN, 0x800, METHOD_BUFFERED, FILE_ANY_ACCESS)`).
+  The input buffer starts with this header:
+
+  | Offset | Size | Field | Host to device | Device to host |
+  |---:|---:|---|---|---|
+  | `0x00` | u32 | transfer direction | `0` | `1` |
+  | `0x04` | u32 | payload length | payload length | `0` |
+  | `0x08` | u16 | URB function | `0x0017` (`URB_FUNCTION_VENDOR_DEVICE`) | `0x0017` |
+  | `0x0a` | u16 | `wValue` | `0` | `0` |
+  | `0x0c` | u16 | `wIndex` | `0` | `0` |
+  | `0x0e` | u8 | reserved | `0` | `0` |
+  | `0x0f` | u8 | `bRequest` | `0x1d` | `0x1e` |
+  | `0x10` | n | payload | message bytes | none |
+
+  Inputs are padded to at least `0x14` bytes. Host-to-device requests pass no
+  output buffer; device-to-host requests receive the message in the output
+  buffer, whose size is the requested length. The panel calls the write
+  helper only with `bRequest` `0x1d` and the read helper only with `0x1e`, both
+  with `wValue` and `wIndex` zero. That matches the vendor requests above, so
+  the message format is unchanged.
+- The header layout is confirmed for reads and writes by the validation above. Still
+  unconfirmed: the exact meaning of header bytes `0x00` and `0x0e`
+  (inferred from `_URB_CONTROL_VENDOR_OR_CLASS_REQUEST` conventions), and
+  whether control requests are safe while the driver streams ASIO audio. The
+  ASIO DLL uses further private IOCTLs (`0x222028`–`0x222068`, `0x22603e`,
+  `0x22a041`, `0x22a054`) for streaming, buffer size and sample rate; they are
+  not decoded and are not used.

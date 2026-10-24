@@ -98,30 +98,32 @@ jobs:
             exit 0
           fi
 
+          version="$({
+            sed -n '/^\[workspace\.package\]$/,/^\[/p' Cargo.toml |
+              sed -nE 's/^version = "([0-9]+\.[0-9]+\.[0-9]+)"$/\1/p'
+          } | head -n 1)"
+          if [[ -z "${version}" ]]; then
+            echo "Could not read the version from [workspace.package]." >&2
+            exit 1
+          fi
+          release_tag="v${version}"
+
           latest_tag="$({
             git tag --list 'v*' |
               grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true
           } | sort -V | tail -n 1)"
+          highest_tag="$(printf '%s\n%s\n' "${latest_tag}" "${release_tag}" | sort -V | tail -n 1)"
 
-          if [[ -z "${latest_tag}" ]]; then
-            version="$({
-              sed -n '/^\[workspace\.package\]$/,/^\[/p' Cargo.toml |
-                sed -nE 's/^version = "([0-9]+\.[0-9]+\.[0-9]+)"$/\1/p'
-            } | head -n 1)"
-            if [[ -z "${version}" ]]; then
-              echo "Could not read the initial stable version from [workspace.package]." >&2
-              exit 1
-            fi
-          else
-            version="${latest_tag#v}"
-            IFS=. read -r major minor patch <<< "${version}"
-            version="${major}.${minor}.$((10#${patch} + 1))"
-          fi
-
-          release_tag="v${version}"
-          if git show-ref --verify --quiet "refs/tags/${release_tag}"; then
-            echo "Refusing to replace existing tag ${release_tag}." >&2
-            exit 1
+          if git show-ref --verify --quiet "refs/tags/${release_tag}" ||
+            [[ "${highest_tag}" != "${release_tag}" ]]; then
+            {
+              echo "### Release candidate not created"
+              echo
+              echo "Workspace version ${version} is not newer than the latest tag ${latest_tag}."
+              echo "Increase [workspace.package] version in Cargo.toml when delivering changes to main."
+            } >> "${GITHUB_STEP_SUMMARY}"
+            set_output "should_release=false"
+            exit 0
           fi
 
           git config user.name "github-actions[bot]"
@@ -166,6 +168,8 @@ jobs:
             "us-hr-custom-control-${RELEASE_TAG}-macOS-arm64.tar.gz"
           mv us-hr-custom-control-Linux-x64.tar.gz \
             "us-hr-custom-control-${RELEASE_TAG}-Linux-x64.tar.gz"
+          mv us-hr-custom-control-Windows-x64.zip \
+            "us-hr-custom-control-${RELEASE_TAG}-Windows-x64.zip"
       - name: Create checksums
         working-directory: release-assets
         run: sha256sum ./* > SHA256SUMS

@@ -17,8 +17,17 @@ project decision and a separate safety design.
 
 - `crates/us-hr-core`: platform-independent device models, settings, status
   types, and the USB message codec. Keep this crate free of USB and GUI code.
-- `crates/us-hr-usb`: libusb transport, discovery, protocol queries, setting
-  writes, and read-back verification.
+- `crates/us-hr-usb`: discovery, the backend-neutral `Transport<C:
+  ControlChannel>` protocol layer (queries, setting writes, read-back
+  verification), and the libusb and TEAC-driver `ControlChannel`s. New
+  platform backends implement `ControlChannel` only; do not duplicate protocol
+  logic.
+- `crates/us-hr-windows`: TEAC Windows driver request encoding (safe, tested on
+  every platform) and the SetupAPI/IOCTL FFI (`cfg(windows)`). It is the only
+  crate allowed to contain `unsafe` code: its lints copy the workspace policy
+  with `unsafe_code = "deny"` instead of `forbid`, the FFI module opts in, and
+  every `unsafe` block needs a `SAFETY:` comment. Keep its lint lists in sync
+  with the workspace and keep FFI out of every other crate.
 - `apps/us-hr-cli`: read-only diagnostics and explicitly requested, scriptable
   setting changes.
 - `apps/us-hr-control`: egui/eframe desktop application, undo history, presets,
@@ -26,7 +35,8 @@ project decision and a separate safety design.
 - `docs/protocol.md`: source of truth for reverse-engineered command mappings,
   conversions, supported devices, and platform limitations.
 - `packaging`: platform integration and release packaging assets.
-- `.github/workflows`: macOS arm64 and Linux x64 CI/release jobs.
+- `.github/workflows`: macOS arm64, Linux x64, and Windows x64 CI/release jobs.
+- `packaging/windows`: Windows icon and the read-only driver diagnostics script.
 
 ## Invariants and device safety
 
@@ -78,15 +88,19 @@ project decision and a separate safety design.
 
 ## Cross-platform requirements
 
-- Supported build targets are Apple Silicon macOS and 64-bit Linux. Avoid
+- Supported build targets are Apple Silicon macOS, 64-bit Linux, and 64-bit
+  Windows. Avoid
   platform-specific assumptions in `us-hr-core` and `us-hr-usb`. Isolate
   unavoidable platform behavior behind narrow `cfg` blocks.
 - Keep both Wayland and X11 support enabled for Linux GUI builds.
 - Do not replace or rebind the Windows audio driver. ASIO buffer sizing belongs
   to the vendor driver and is not a portable device setting.
-- Do not build or publish Windows packages until a dedicated backend can access
-  vendor controls without replacing the audio driver. Descriptor discovery was
-  validated on Windows, but control-path access is not functional.
+- Windows control goes through the official TEAC driver's private control
+  file and vendor-request IOCTL (see `docs/protocol.md`). Never install,
+  replace, or rebind drivers from this project. Status reads and one verified
+  write were validated on Windows 11 x64 with the TASCAM driver; changing a
+  setting to a different value has not been tested on Windows yet. Windows x64
+  release candidates are packaged like the other platforms.
 - When adding dependencies, prefer portable Rust crates, avoid wildcard
   versions, update `Cargo.lock`, and ensure the license/source policy in
   `deny.toml` still passes.
@@ -126,6 +140,8 @@ actionlint .github/workflows/*.yml
 shellcheck packaging/macos/bundle.sh
 ```
 
+CI also parses `packaging/windows/collect-driver-info.ps1` with PowerShell.
+
 If a required external checker is unavailable, say so explicitly instead of
 claiming it passed. Keep the working tree free of generated build artifacts;
 `target/` is not source.
@@ -157,6 +173,26 @@ open "target/release/US-HR Custom Control.app"
 The raw `target/release/us-hr-control` file is a Unix executable, not the item a
 macOS user should double-click. After UI work, inspect the packaged application,
 not only a debug build.
+
+## Versioning
+
+- Every change delivered to `main` must increase the application version in
+  `[workspace.package]` in `Cargo.toml`. Use semantic versioning
+  (`MAJOR.MINOR.PATCH`):
+  - MAJOR: significant changes only, and only after the project owner has
+    explicitly approved the major release. Never bump MAJOR on your own.
+  - MINOR: new features; reset PATCH to zero.
+  - PATCH: bug fixes, chores, and housekeeping (documentation, CI,
+    dependencies, refactors without behavior changes).
+- Bump once per pull request, in that pull request, according to its largest
+  change. Keep the `version` requirements on internal path dependencies in the
+  crate manifests and `CFBundleShortVersionString` in
+  `packaging/macos/Info.plist` in step with the workspace version, and update
+  `Cargo.lock`. The GUI reads its displayed version from `CARGO_PKG_VERSION`.
+- CI's version-policy job fails a pull request to `main` whose version is not
+  higher than `main`'s, or whose macOS bundle version does not match.
+- The release workflow tags the workspace version and skips a release
+  candidate whose version is not newer than the latest tag.
 
 ## Documentation and hand-off
 

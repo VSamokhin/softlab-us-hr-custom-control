@@ -1,13 +1,37 @@
 # US-HR Custom Control
 
+## Why this project exists
+
+The main goal is to keep the TASCAM US-HR interfaces fully usable on **macOS**.
+TASCAM's original Settings Panel no longer appears to be maintained: on macOS it
+is an older Intel-only application, so it may stop working on new macOS
+versions. This project replaces it with a native, maintained control panel.
+Linux and Windows support follow from the same cross-platform code.
+
+## Overview
+
 An independent, cross-platform control application for the TASCAM US-HR USB
 audio-interface family. Only the US-1x2HR is currently supported and tested for
 status queries and setting changes.
 
 The project does **not** replace an audio driver. It controls the interface's
 internal mixer and device settings over vendor-specific USB control transfers.
-macOS and Linux use their standard USB-audio stacks. Windows control is not
-supported, so Windows binaries are not built or published.
+macOS and Linux use their standard USB-audio stacks.
+
+## Requirements
+
+| Platform | Required before use |
+|---|---|
+| macOS | Nothing beyond the operating system's built-in USB audio support. |
+| Linux | The udev rule in `packaging/linux/99-tascam-us-hr.rules` (see [Linux permissions](#linux-permissions)). |
+| **Windows** | **The official TASCAM US-HR driver** ("US-HR Series Driver", `TASCAM_US-HR_Installer_1.00.exe` from TASCAM's US-1x2HR download page). |
+
+> **Windows:** this application cannot control the interface without the
+> TASCAM driver. With Windows' built-in USB audio driver the interface still
+> plays audio and is detected, but its settings cannot be read or changed.
+> The application never installs or replaces drivers itself; install the
+> TASCAM package first (administrator rights are needed once for that
+> installation, not for this application). See [Windows](#windows).
 
 The reverse-engineering findings and command map are documented in
 [`docs/protocol.md`](docs/protocol.md).
@@ -31,9 +55,8 @@ The reverse-engineering findings and command map are documented in
   been tested and must not be assumed to be compatible.
 - macOS arm64 is the only platform tested at runtime with real hardware. The
   Linux x64 build compiles in CI, but has not been runtime-tested or
-  hardware-validated. Windows builds are disabled because the available USB
-  backend cannot open the device control path without replacing the audio
-  driver.
+  hardware-validated. Windows 11 x64 with the TASCAM driver has been tested
+  with real hardware (status reads and one verified write).
 
 Firmware updating is intentionally out of scope until the ordinary settings
 protocol is complete and thoroughly tested.
@@ -112,7 +135,7 @@ macOS application bundle.
 Enter a name under **Presets** and choose **Save current** to store the latest
 verified device state. Choose a preset and select **Apply and verify** to write
 the complete snapshot and confirm it through hardware read-back. **Cmd+Z** on
-macOS or **Ctrl+Z** on Linux restores the previous verified state
+macOS or **Ctrl+Z** on Linux and Windows restores the previous verified state
 from the current application session. Up to 50 states are retained; preset
 application creates one undo step rather than one step per setting. The history
 is cleared when the connected device set changes.
@@ -132,34 +155,56 @@ tag rather than making the device world-writable.
 
 ### Windows
 
-Windows builds and release packages are disabled because the application cannot
-open the device control path with the normal Windows audio driver. The source
-may still compile on Windows, but that does not provide a functional control
-application.
+**Requirement: the official TASCAM US-HR driver must be installed.** Windows
+control requires that driver (TEAC
+`us-1x2hr.sys`, installed by `TASCAM_US-HR_Installer_1.00.exe`). With Windows'
+built-in USB Audio 2 driver the interface is detected, but no application can
+send it vendor control requests, so the GUI reports it as detected without
+control and the CLI's `inspect` fails.
 
-The Windows x64 build has been launched with a connected US-1x2HR using the
-built-in Windows USB Audio 2 driver. Device-descriptor discovery succeeds, but
-the libusb backend cannot open the vendor-control path because the device is
-bound only to the `usbccgp` and `usbaudio2` drivers. The GUI therefore reports
-the interface as detected but cannot read or change its control state.
+When the TASCAM driver is installed, the application talks to the device the
+same way the official Settings Panel does: it finds the driver's render
+interface, opens the driver's private `us-1x2hr` control file, and relays the
+same 64-byte vendor messages used on macOS and Linux through the driver's
+vendor-request IOCTL. Audio keeps running through the TASCAM driver; this
+application never installs, replaces, or rebinds drivers. The transport is
+documented in [`docs/protocol.md`](docs/protocol.md#windows-transport).
+
+With the TASCAM driver installed on Windows 11 x64, the CLI and the GUI read the
+complete device state of a US-1x2HR, and a verified write (reapplying broadcast
+volume 70) succeeded. Changing a setting to a different value has not yet been
+tested on Windows.
+
+The Windows x64 release package contains `us-hr-control.exe` (a windowed
+application with the embedded icon), `us-hr-cli.exe`, and the diagnostics
+script. Install the TASCAM driver before running them. Debug builds keep a
+console for logs.
 
 Do not replace the audio function or composite parent with a generic WinUSB
 driver: doing so would prevent Windows from using the interface for audio.
-Windows control support needs a dedicated backend that can coexist with the
-TASCAM audio driver. Installing the official TASCAM package provides its own
-driver and Settings Panel, but compatibility with that driver's private control
-interface has not yet been implemented in this project.
+
+`packaging/windows/collect-driver-info.ps1` reports the drivers, device
+interfaces, and TASCAM software associated with a connected interface. It only
+reads device properties and the registry:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File packaging\windows\collect-driver-info.ps1 > us-hr-driver-info.txt
+```
 
 ## Structure
 
 - `crates/us-hr-core`: platform-independent model and message codec.
-- `crates/us-hr-usb`: libusb transport and typed US-HR operations.
+- `crates/us-hr-usb`: backend-neutral protocol transport, the libusb and TEAC
+  driver control channels, and typed US-HR operations.
+- `crates/us-hr-windows`: TEAC driver request encoding and the Windows FFI;
+  the only crate that permits `unsafe` code.
 - `apps/us-hr-cli`: diagnostics and scriptable settings.
 - `apps/us-hr-control`: native desktop UI using egui/eframe.
 
 CI treats warnings as errors, verifies the declared Rust 1.85 minimum, checks
 formatting, runs unit/property tests and dependency policy checks, and compiles
-separate macOS arm64 and Linux x64 builds. Tagged releases upload each supported
+separate macOS arm64, Linux x64, and Windows x64 builds; the Windows job also
+runs Clippy and the tests on Windows. Tagged releases upload each supported
 platform build as its own artifact.
 
 ### Creating a release
@@ -167,8 +212,10 @@ platform build as its own artifact.
 Every successful `main` branch CI run is eligible to become a release
 candidate. The serialized release workflow checks that no tagged draft release
 is awaiting a decision, then creates an annotated semantic-version tag for the
-tested commit. The first automatically generated tag uses the workspace version
-from `Cargo.toml`; later candidates increment its patch component.
+tested commit. The tag is the `[workspace.package]` version from `Cargo.toml`.
+That version must increase with every delivery to `main` (see
+[Versioning](#versioning)); if it is not newer than the latest tag, the release
+workflow records why and creates no candidate.
 
 The CI workflow builds and packages that exact commit for every platform. After
 all CI jobs pass, the release workflow reuses those immutable workflow
@@ -191,7 +238,19 @@ routine. Rerunning a failed release workflow safely reuses a tag that already
 points at the same commit.
 
 Creating or publishing a draft does not imply runtime or hardware validation of
-the Linux package.
+the Linux package. The Windows package has been validated only as described in
+the Windows section and requires the TASCAM driver.
+
+### Versioning
+
+The application uses semantic versioning, `MAJOR.MINOR.PATCH`, set once in
+`[workspace.package]` in `Cargo.toml`. Every change delivered to `main`
+increases it:
+
+- **MAJOR** for significant changes, and only with the project owner's
+  explicit approval;
+- **MINOR** for new features, resetting PATCH to zero;
+- **PATCH** for bug fixes, chores, and housekeeping.
 
 ## Safety
 

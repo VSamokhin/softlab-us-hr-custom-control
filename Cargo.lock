@@ -374,9 +374,9 @@ checksum = "1c133bc6a41be0d194c306b5506d15e6feeea7b1d6604bd3f8310dfb2ca96486"
 
 [[package]]
 name = "clipboard-win"
-version = "5.4.1"
+version = "5.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bde03770d3df201d4fb868f2c9c59e66a3e4e2bd06692a0fe701e7103c7e84d4"
+checksum = "052af7878466feccda12ba7a6a67d019d712f296809559b47c12c8cc196d3a9a"
 dependencies = [
  "error-code",
 ]
@@ -2673,7 +2673,7 @@ dependencies = [
 
 [[package]]
 name = "us-hr-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2685,7 +2685,7 @@ dependencies = [
 
 [[package]]
 name = "us-hr-control"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "eframe",
  "serde",
@@ -2694,11 +2694,12 @@ dependencies = [
  "thiserror 2.0.21",
  "us-hr-core",
  "us-hr-usb",
+ "winresource",
 ]
 
 [[package]]
 name = "us-hr-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "proptest",
  "serde",
@@ -2707,12 +2708,21 @@ dependencies = [
 
 [[package]]
 name = "us-hr-usb"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "rusb",
  "thiserror 2.0.21",
  "tracing",
  "us-hr-core",
+ "us-hr-windows",
+]
+
+[[package]]
+name = "us-hr-windows"
+version = "0.2.0"
+dependencies = [
+ "us-hr-core",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3363,6 +3373,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "23b97319f7b8343df12cc98938e5c3eb436064524c8d2b4e30a1d3a36eecdf81"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "winresource"
+version = "0.1.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2bc6d36480b829272a5bdabf08e6dca8004761c1da7e35efef800540c66221b"
+dependencies = [
+ "version_check",
 ]
 
 [[package]]

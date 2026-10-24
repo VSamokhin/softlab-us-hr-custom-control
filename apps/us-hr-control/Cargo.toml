@@ -11,8 +11,11 @@ serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
-us-hr-core = { path = "../../crates/us-hr-core", version = "0.1.0" }
-us-hr-usb = { path = "../../crates/us-hr-usb", version = "0.1.0" }
+us-hr-core = { path = "../../crates/us-hr-core", version = "0.2.0" }
+us-hr-usb = { path = "../../crates/us-hr-usb", version = "0.2.0" }
+
+[target.'cfg(windows)'.build-dependencies]
+winresource.workspace = true
 
 [lints]
 workspace = true

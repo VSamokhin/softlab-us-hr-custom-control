@@ -1,6 +1,7 @@
 //! Cross-platform USB discovery and transport for TASCAM US-HR devices.
 
 use std::{
+    io,
     sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError},
     thread::{self, JoinHandle},
     time::{Duration, Instant},
@@ -278,14 +279,124 @@ pub enum AccessMode {
     ReadWrite,
 }
 
-/// Open control-transfer connection to one US-HR device.
-pub struct UsbTransport {
+/// Raw vendor-message channel to one US-HR device.
+///
+/// Implementations carry one encoded protocol message per call: `send` issues
+/// the host-to-device vendor request (`0x40`/`0x1d`) and `receive` issues the
+/// device-to-host request (`0xc0`/`0x1e`). Readiness polling, response
+/// matching, write policy, and read-back verification live in [`Transport`],
+/// so every platform backend shares them.
+pub trait ControlChannel {
+    /// Sends one encoded message and returns the number of bytes transferred.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the backend cannot complete the transfer.
+    fn send(&mut self, payload: &[u8]) -> Result<usize, ChannelError>;
+
+    /// Receives one encoded message into `buffer` and returns its length.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the backend cannot complete the transfer.
+    fn receive(&mut self, buffer: &mut [u8; MAX_MESSAGE_LEN]) -> Result<usize, ChannelError>;
+}
+
+/// Backend-neutral control-channel failure.
+#[derive(Debug, Error)]
+pub enum ChannelError {
+    /// A libusb control transfer failed.
+    #[error(transparent)]
+    LibUsb(#[from] rusb::Error),
+    /// An operating-system I/O request failed.
+    #[error(transparent)]
+    Io(#[from] io::Error),
+}
+
+impl ChannelError {
+    /// Returns whether the protocol may retry the transfer after a short delay.
+    #[must_use]
+    pub fn is_transient(&self) -> bool {
+        match self {
+            Self::LibUsb(error) => matches!(
+                error,
+                rusb::Error::Pipe | rusb::Error::Timeout | rusb::Error::Interrupted
+            ),
+            Self::Io(error) => matches!(
+                error.kind(),
+                io::ErrorKind::TimedOut | io::ErrorKind::Interrupted | io::ErrorKind::WouldBlock
+            ),
+        }
+    }
+}
+
+/// Control channel backed by a libusb device handle.
+pub struct LibusbChannel {
     handle: DeviceHandle<Context>,
+}
+
+impl ControlChannel for LibusbChannel {
+    fn send(&mut self, payload: &[u8]) -> Result<usize, ChannelError> {
+        Ok(self.handle.write_control(
+            REQUEST_TYPE_OUT,
+            REQUEST_SEND,
+            0,
+            0,
+            payload,
+            CONTROL_TIMEOUT,
+        )?)
+    }
+
+    fn receive(&mut self, buffer: &mut [u8; MAX_MESSAGE_LEN]) -> Result<usize, ChannelError> {
+        Ok(self.handle.read_control(
+            REQUEST_TYPE_IN,
+            REQUEST_RECEIVE,
+            0,
+            0,
+            buffer,
+            CONTROL_TIMEOUT,
+        )?)
+    }
+}
+
+/// Protocol connection to one US-HR device over any [`ControlChannel`].
+pub struct Transport<C> {
+    channel: C,
     info: DeviceInfo,
     access_mode: AccessMode,
 }
 
-impl UsbTransport {
+/// Control channel chosen for the current platform and installed drivers.
+pub enum PlatformChannel {
+    /// Direct USB control transfers through libusb (macOS and Linux).
+    Libusb(LibusbChannel),
+    /// Vendor requests relayed by the TEAC Windows driver.
+    #[cfg(windows)]
+    TeacDriver(teac::TeacDriverChannel),
+}
+
+impl ControlChannel for PlatformChannel {
+    fn send(&mut self, payload: &[u8]) -> Result<usize, ChannelError> {
+        match self {
+            Self::Libusb(channel) => channel.send(payload),
+            #[cfg(windows)]
+            Self::TeacDriver(channel) => channel.send(payload),
+        }
+    }
+
+    fn receive(&mut self, buffer: &mut [u8; MAX_MESSAGE_LEN]) -> Result<usize, ChannelError> {
+        match self {
+            Self::Libusb(channel) => channel.receive(buffer),
+            #[cfg(windows)]
+            Self::TeacDriver(channel) => channel.receive(buffer),
+        }
+    }
+}
+
+/// Protocol connection opened through the platform's control backend.
+pub type UsbTransport = Transport<PlatformChannel>;
+
+impl Transport<PlatformChannel> {
     /// Opens the first supported device in read-only mode.
     ///
     /// # Errors
@@ -303,6 +414,14 @@ impl UsbTransport {
     /// Returns an error if USB enumeration or opening fails, or if no supported
     /// interface is connected.
     pub fn open_first(access_mode: AccessMode) -> Result<Self, UsbError> {
+        #[cfg(windows)]
+        if let Some(transport) = teac::open_first(access_mode)? {
+            return Ok(transport);
+        }
+        Self::open_first_libusb(access_mode)
+    }
+
+    fn open_first_libusb(access_mode: AccessMode) -> Result<Self, UsbError> {
         let context = Context::new()?;
         let devices = context.devices()?;
         for device in devices.iter() {
@@ -327,13 +446,25 @@ impl UsbTransport {
                 manufacturer_string: handle.read_manufacturer_string_ascii(&descriptor).ok(),
                 serial_number: handle.read_serial_number_string_ascii(&descriptor).ok(),
             };
-            return Ok(Self {
-                handle,
+            return Ok(Self::new(
+                PlatformChannel::Libusb(LibusbChannel { handle }),
                 info,
                 access_mode,
-            });
+            ));
         }
         Err(UsbError::NotFound)
+    }
+}
+
+impl<C: ControlChannel> Transport<C> {
+    /// Wraps an already opened control channel with the shared protocol logic.
+    #[must_use]
+    pub const fn new(channel: C, info: DeviceInfo, access_mode: AccessMode) -> Self {
+        Self {
+            channel,
+            info,
+            access_mode,
+        }
     }
 
     /// Returns descriptor information for the open device.
@@ -613,14 +744,7 @@ impl UsbTransport {
         if payload.len() > MAX_MESSAGE_LEN {
             return Err(UsbError::MessageTooLong(payload.len()));
         }
-        let transferred = self.handle.write_control(
-            REQUEST_TYPE_OUT,
-            REQUEST_SEND,
-            0,
-            0,
-            payload,
-            CONTROL_TIMEOUT,
-        )?;
+        let transferred = self.channel.send(payload)?;
         if transferred != payload.len() {
             return Err(UsbError::ShortWrite {
                 expected: payload.len(),
@@ -632,15 +756,96 @@ impl UsbTransport {
 
     fn receive(&mut self) -> Result<Vec<u8>, UsbError> {
         let mut buffer = [0_u8; MAX_MESSAGE_LEN];
-        let transferred = self.handle.read_control(
-            REQUEST_TYPE_IN,
-            REQUEST_RECEIVE,
-            0,
-            0,
-            &mut buffer,
-            CONTROL_TIMEOUT,
-        )?;
-        Ok(buffer[..transferred].to_vec())
+        let transferred = self.channel.receive(&mut buffer)?;
+        Ok(buffer[..transferred.min(MAX_MESSAGE_LEN)].to_vec())
+    }
+}
+
+#[cfg(windows)]
+pub use teac::TeacDriverChannel;
+
+#[cfg(windows)]
+mod teac {
+    //! Control channel through the TEAC driver installed by the TASCAM package.
+
+    use us_hr_core::{MAX_MESSAGE_LEN, REQUEST_RECEIVE, REQUEST_SEND};
+    use us_hr_windows::{ControlFile, control_interfaces};
+
+    use super::{
+        AccessMode, ChannelError, ControlChannel, DeviceInfo, PlatformChannel, Transport, UsbError,
+        UsbTransport, discover,
+    };
+
+    /// Vendor requests relayed by the TEAC driver's private control file.
+    pub struct TeacDriverChannel(ControlFile);
+
+    impl ControlChannel for TeacDriverChannel {
+        fn send(&mut self, payload: &[u8]) -> Result<usize, ChannelError> {
+            Ok(self.0.vendor_out(REQUEST_SEND, 0, 0, payload)?)
+        }
+
+        fn receive(&mut self, buffer: &mut [u8; MAX_MESSAGE_LEN]) -> Result<usize, ChannelError> {
+            Ok(self.0.vendor_in(REQUEST_RECEIVE, 0, 0, buffer)?)
+        }
+    }
+
+    /// Opens the first device served by the TEAC driver, if any.
+    ///
+    /// Returns `Ok(None)` when no TEAC driver interface is present, so the
+    /// caller can fall back to libusb.
+    pub fn open_first(access_mode: AccessMode) -> Result<Option<UsbTransport>, UsbError> {
+        let interfaces = match control_interfaces() {
+            Ok(interfaces) => interfaces,
+            Err(error) => {
+                tracing::warn!(%error, "could not enumerate TASCAM driver interfaces");
+                return Ok(None);
+            }
+        };
+        // The in-box usbaudio2 driver registers the same render interface but
+        // has no control file, so a missing file means "not the TEAC driver".
+        let mut opened = None;
+        for interface in interfaces {
+            match ControlFile::open(&interface.control_path) {
+                Ok(file) => {
+                    opened = Some((interface, file));
+                    break;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    tracing::debug!(path = %interface.control_path, "no TASCAM driver control file");
+                }
+                Err(source) => {
+                    return Err(UsbError::OpenDriverControl {
+                        device: interface.model.display_name(),
+                        source,
+                    });
+                }
+            }
+        }
+        let Some((interface, file)) = opened else {
+            return Ok(None);
+        };
+        let info = discover()
+            .ok()
+            .and_then(|devices| {
+                devices
+                    .into_iter()
+                    .find(|device| device.model == interface.model)
+            })
+            .unwrap_or(DeviceInfo {
+                model: interface.model,
+                bus_number: 0,
+                address: 0,
+                usb_device_version: (0, 0, 0),
+                product_string: None,
+                manufacturer_string: None,
+                serial_number: None,
+            });
+        tracing::debug!(path = %interface.control_path, "opened TASCAM driver control file");
+        Ok(Some(Transport::new(
+            PlatformChannel::TeacDriver(TeacDriverChannel(file)),
+            info,
+            access_mode,
+        )))
     }
 }
 
@@ -650,6 +855,9 @@ pub enum UsbError {
     /// Underlying libusb failure.
     #[error(transparent)]
     LibUsb(#[from] rusb::Error),
+    /// A control transfer on the open device failed.
+    #[error(transparent)]
+    Channel(#[from] ChannelError),
     /// The background device-monitor thread could not be started.
     #[error("failed to start USB device monitor: {0}")]
     MonitorThread(#[source] std::io::Error),
@@ -670,6 +878,18 @@ pub enum UsbError {
         /// Error reported by the active libusb backend.
         #[source]
         source: rusb::Error,
+    },
+    /// The TEAC Windows driver serves the device, but refused to open its
+    /// control file.
+    #[error(
+        "{device} was detected, but the TASCAM driver's control path could not be opened: {source}"
+    )]
+    OpenDriverControl {
+        /// Display name of the detected device.
+        device: &'static str,
+        /// Error reported by the operating system.
+        #[source]
+        source: io::Error,
     },
     /// A write was attempted through a read-only transport.
     #[error("device writes are disabled by the transport safety policy")]
@@ -832,10 +1052,7 @@ fn validate_snapshot_for_write(
 }
 
 fn is_retryable_receive_error(error: &UsbError) -> bool {
-    matches!(
-        error,
-        UsbError::LibUsb(rusb::Error::Pipe | rusb::Error::Timeout | rusb::Error::Interrupted)
-    )
+    matches!(error, UsbError::Channel(error) if error.is_transient())
 }
 
 #[cfg(test)]
@@ -962,11 +1179,326 @@ mod tests {
 
     #[test]
     fn retries_only_temporary_receive_errors() {
-        assert!(is_retryable_receive_error(&UsbError::LibUsb(
-            rusb::Error::Pipe
+        assert!(is_retryable_receive_error(&UsbError::Channel(
+            ChannelError::LibUsb(rusb::Error::Pipe)
+        )));
+        assert!(is_retryable_receive_error(&UsbError::Channel(
+            ChannelError::Io(io::Error::from(io::ErrorKind::TimedOut))
+        )));
+        assert!(!is_retryable_receive_error(&UsbError::Channel(
+            ChannelError::LibUsb(rusb::Error::Access)
+        )));
+        assert!(!is_retryable_receive_error(&UsbError::Channel(
+            ChannelError::Io(io::Error::from(io::ErrorKind::PermissionDenied))
         )));
         assert!(!is_retryable_receive_error(&UsbError::LibUsb(
-            rusb::Error::Access
+            rusb::Error::Pipe
         )));
+    }
+
+    /// In-memory device that answers with the mappings in `docs/protocol.md`.
+    struct SimulatedDevice {
+        settings: DeviceSettings,
+        pending: std::collections::VecDeque<Vec<u8>>,
+        acknowledgements_before_response: usize,
+        transient_failures: usize,
+        ignore_writes: bool,
+        sent: Vec<Vec<u8>>,
+    }
+
+    impl SimulatedDevice {
+        fn new(settings: DeviceSettings) -> Self {
+            Self {
+                settings,
+                pending: std::collections::VecDeque::new(),
+                acknowledgements_before_response: 0,
+                transient_failures: 0,
+                ignore_writes: false,
+                sent: Vec::new(),
+            }
+        }
+
+        fn channel_value(&self, group: u8, index: u8, command: u8) -> Option<u8> {
+            let settings = &self.settings;
+            match (group, index, command) {
+                (5, 1, GET_STEREO) => Some(mode_to_wire(settings.direct_monitor)),
+                (4, 1, GET_MUTE) => Some(u8::from(!settings.input_1_enabled)),
+                (4, 2, GET_MUTE) => Some(u8::from(!settings.input_2_enabled)),
+                (5, 1, GET_FADER) => Some(127 - settings.monitor_balance),
+                (6, 0, GET_FADER) => Some(u8::from(settings.loopback_enabled)),
+                (4, 1, GET_STEREO) => Some(mode_to_wire(settings.loopback_input)),
+                (3, 1, GET_STEREO) => Some(mode_to_wire(settings.loopback_output)),
+                (6, 1, GET_FADER) => Some(settings.broadcast_volume),
+                _ => None,
+            }
+        }
+
+        fn apply_channel_write(&mut self, group: u8, index: u8, command: u8, value: u8) {
+            if self.ignore_writes {
+                return;
+            }
+            let settings = &mut self.settings;
+            let mode = mode_from_wire(value).ok();
+            match (group, index, command) {
+                (5, 1, SET_STEREO) => settings.direct_monitor = mode.unwrap_or_default(),
+                (4, 1, SET_MUTE) => settings.input_1_enabled = value == 0,
+                (4, 2, SET_MUTE) => settings.input_2_enabled = value == 0,
+                (5, 1, SET_FADER) => settings.monitor_balance = 127 - value,
+                (6, 0, SET_FADER) => settings.loopback_enabled = value != 0,
+                (4, 1, SET_STEREO) => settings.loopback_input = mode.unwrap_or_default(),
+                (3, 1, SET_STEREO) => settings.loopback_output = mode.unwrap_or_default(),
+                (6, 1, SET_FADER) => settings.broadcast_volume = value,
+                _ => {}
+            }
+        }
+
+        fn respond(&mut self, request: &Message) -> Result<Option<Message>, MessageError> {
+            let mut response = Message::new();
+            let fields = request.fields();
+            match fields {
+                [
+                    Field {
+                        id: 0x31,
+                        value: FieldValue::Query,
+                    },
+                ] => {
+                    response = identity_response()?;
+                }
+                [
+                    Field {
+                        id: 0x18,
+                        value: FieldValue::Query,
+                    },
+                ] => {
+                    response.push(Field {
+                        id: 0x18,
+                        value: FieldValue::U32(48_000),
+                    })?;
+                }
+                [
+                    Field {
+                        id: 0x14,
+                        value: FieldValue::Query,
+                    },
+                ] => {
+                    response.push(Field {
+                        id: 0x15,
+                        value: FieldValue::U8(u8::from(self.settings.auto_power_save)),
+                    })?;
+                }
+                [
+                    Field {
+                        id: 0x15,
+                        value: FieldValue::U8(value),
+                    },
+                ] => {
+                    if !self.ignore_writes {
+                        self.settings.auto_power_save = *value != 0;
+                    }
+                    return Ok(None);
+                }
+                [
+                    Field {
+                        id: FIELD_CHANNEL_GROUP,
+                        value: FieldValue::U8(group),
+                    },
+                    Field {
+                        id: FIELD_CHANNEL_INDEX,
+                        value: FieldValue::U8(index),
+                    },
+                    Field { id: command, value },
+                ] => match value {
+                    FieldValue::Query => {
+                        let Some(current) = self.channel_value(*group, *index, *command) else {
+                            return Ok(None);
+                        };
+                        for field in [
+                            Field {
+                                id: FIELD_CHANNEL_GROUP,
+                                value: FieldValue::U8(*group),
+                            },
+                            Field {
+                                id: FIELD_CHANNEL_INDEX,
+                                value: FieldValue::U8(*index),
+                            },
+                            Field {
+                                id: *command,
+                                value: FieldValue::U8(current),
+                            },
+                        ] {
+                            response.push(field)?;
+                        }
+                    }
+                    FieldValue::U8(new_value) => {
+                        self.apply_channel_write(*group, *index, *command, *new_value);
+                        return Ok(None);
+                    }
+                    _ => return Ok(None),
+                },
+                _ => return Ok(None),
+            }
+            Ok(Some(response))
+        }
+    }
+
+    fn identity_response() -> Result<Message, MessageError> {
+        let mut response = Message::new();
+        for (id, value) in [
+            (0x32, FieldValue::U16(100)),
+            (0x33, FieldValue::U16(14)),
+            (0x34, FieldValue::Bytes(b"US-1x2HR".to_vec())),
+            (0x35, FieldValue::Bytes(b"2023/01/01".to_vec())),
+            (0x36, FieldValue::Bytes(b"12:00".to_vec())),
+            (0x37, FieldValue::Bytes(b"TASCAM".to_vec())),
+        ] {
+            response.push(Field { id, value })?;
+        }
+        Ok(response)
+    }
+
+    fn ready_message() -> Result<Vec<u8>, MessageError> {
+        let mut message = Message::new();
+        message.push(Field {
+            id: FIELD_READY,
+            value: FieldValue::U8(1),
+        })?;
+        message.encode()
+    }
+
+    impl ControlChannel for SimulatedDevice {
+        fn send(&mut self, payload: &[u8]) -> Result<usize, ChannelError> {
+            self.sent.push(payload.to_vec());
+            let request = Message::decode(payload)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+            let response = self
+                .respond(&request)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+            if let Some(response) = response {
+                let encoded = response
+                    .encode()
+                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+                for _ in 0..self.acknowledgements_before_response {
+                    self.pending.push_back(
+                        ready_message()
+                            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?,
+                    );
+                }
+                self.pending.push_back(encoded);
+            }
+            Ok(payload.len())
+        }
+
+        fn receive(&mut self, buffer: &mut [u8; MAX_MESSAGE_LEN]) -> Result<usize, ChannelError> {
+            if self.transient_failures > 0 {
+                self.transient_failures -= 1;
+                return Err(ChannelError::LibUsb(rusb::Error::Timeout));
+            }
+            let bytes = match self.pending.pop_front() {
+                Some(bytes) => bytes,
+                None => ready_message()
+                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?,
+            };
+            buffer[..bytes.len()].copy_from_slice(&bytes);
+            Ok(bytes.len())
+        }
+    }
+
+    fn simulated_settings() -> DeviceSettings {
+        DeviceSettings {
+            direct_monitor: ChannelMode::Stereo,
+            input_1_enabled: true,
+            input_2_enabled: false,
+            monitor_balance: 40,
+            loopback_enabled: true,
+            loopback_input: ChannelMode::Mono,
+            loopback_output: ChannelMode::Stereo,
+            broadcast_volume: 77,
+            auto_power_save: false,
+        }
+    }
+
+    fn simulated_transport(
+        simulated: SimulatedDevice,
+        access_mode: AccessMode,
+    ) -> Transport<SimulatedDevice> {
+        Transport::new(simulated, device(DeviceModel::Us1x2Hr, 1, 2), access_mode)
+    }
+
+    #[test]
+    fn reads_complete_status_through_any_control_channel() -> Result<(), UsbError> {
+        let mut transport = simulated_transport(
+            SimulatedDevice::new(simulated_settings()),
+            AccessMode::ReadOnly,
+        );
+
+        let status = transport.read_status()?;
+
+        assert_eq!(status.settings, simulated_settings());
+        assert_eq!(status.sample_rate_hz, 48_000);
+        assert_eq!(status.firmware.version, 100);
+        assert_eq!(status.firmware.build, 14);
+        assert_eq!(status.firmware.product_name, "US-1x2HR");
+        Ok(())
+    }
+
+    #[test]
+    fn skips_acknowledgements_and_transient_failures() -> Result<(), UsbError> {
+        let mut device = SimulatedDevice::new(simulated_settings());
+        device.acknowledgements_before_response = 2;
+        device.transient_failures = 3;
+        let mut transport = simulated_transport(device, AccessMode::ReadOnly);
+
+        assert_eq!(transport.read_status()?.settings, simulated_settings());
+        Ok(())
+    }
+
+    #[test]
+    fn read_only_transport_never_sends_writes() {
+        let mut transport = simulated_transport(
+            SimulatedDevice::new(simulated_settings()),
+            AccessMode::ReadOnly,
+        );
+
+        assert!(matches!(
+            transport.apply_setting(SettingChange::BroadcastVolume(10)),
+            Err(UsbError::ReadOnly)
+        ));
+        assert!(matches!(
+            transport.apply_settings_verified(DeviceSettings::default()),
+            Err(UsbError::ReadOnly)
+        ));
+        assert_eq!(transport.channel.sent, Vec::<Vec<u8>>::new());
+    }
+
+    #[test]
+    fn verified_writes_are_read_back() -> Result<(), UsbError> {
+        let mut transport = simulated_transport(
+            SimulatedDevice::new(simulated_settings()),
+            AccessMode::ReadWrite,
+        );
+
+        let status = transport.apply_setting_verified(SettingChange::BroadcastVolume(12))?;
+        assert_eq!(status.settings.broadcast_volume, 12);
+
+        let expected = DeviceSettings {
+            monitor_balance: 100,
+            auto_power_save: true,
+            ..DeviceSettings::default()
+        };
+        let status = transport.apply_settings_verified(expected)?;
+        assert_eq!(status.settings, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn reports_writes_missing_from_read_back() {
+        let mut device = SimulatedDevice::new(simulated_settings());
+        device.ignore_writes = true;
+        let mut transport = simulated_transport(device, AccessMode::ReadWrite);
+
+        assert!(matches!(
+            transport.apply_setting_verified(SettingChange::BroadcastVolume(12)),
+            Err(UsbError::VerificationFailed { .. })
+        ));
     }
 }

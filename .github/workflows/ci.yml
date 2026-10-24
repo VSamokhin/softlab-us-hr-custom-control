@@ -24,6 +24,55 @@ jobs:
       - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - run: cargo test --workspace --all-features --locked
 
+  version:
+    name: Version policy
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Check version consistency and bump
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+
+          read_version() {
+            sed -n '/^\[workspace\.package\]$/,/^\[/p' |
+              sed -nE 's/^version = "([0-9]+\.[0-9]+\.[0-9]+)"$/\1/p' |
+              head -n 1
+          }
+
+          version="$(read_version < Cargo.toml)"
+          if [[ -z "${version}" ]]; then
+            echo "::error file=Cargo.toml::Missing [workspace.package] version."
+            exit 1
+          fi
+
+          bundle_version="$(
+            sed -n '/<key>CFBundleShortVersionString<\/key>/{n;s/.*<string>\(.*\)<\/string>.*/\1/p;}' \
+              packaging/macos/Info.plist
+          )"
+          if [[ "${bundle_version}" != "${version}" ]]; then
+            echo "::error file=packaging/macos/Info.plist::CFBundleShortVersionString ${bundle_version} does not match workspace version ${version}."
+            exit 1
+          fi
+
+          if [[ "${BASE_REF}" != "main" ]]; then
+            echo "Workspace version ${version}; no bump required outside pull requests to main."
+            exit 0
+          fi
+
+          base_version="$(git show "${BASE_SHA}:Cargo.toml" | read_version)"
+          highest="$(printf '%s\n%s\n' "${base_version}" "${version}" | sort -V | tail -n 1)"
+          if [[ "${version}" == "${base_version}" || "${highest}" != "${version}" ]]; then
+            echo "::error file=Cargo.toml::Workspace version ${version} must be higher than ${base_version} on main (see Versioning in AGENTS.md)."
+            exit 1
+          fi
+          echo "Version bump ${base_version} -> ${version}."
+
   msrv:
     name: Rust 1.85 MSRV
     runs-on: ubuntu-24.04
@@ -103,6 +152,49 @@ jobs:
           compression-level: 0
           retention-days: 14
           path: dist/us-hr-custom-control-${{ matrix.artifact }}.${{ matrix.archive }}
+
+  windows:
+    name: Windows x64 build and test
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.99.0
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - run: cargo test --workspace --all-features --locked
+      - run: cargo build --workspace --release --locked
+      - name: Check PowerShell script syntax
+        shell: pwsh
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            "packaging/windows/collect-driver-info.ps1", [ref]$null, [ref]$errors) | Out-Null
+          if ($errors) { $errors | ForEach-Object { Write-Error $_.Message }; exit 1 }
+      # Packaged on pull requests too, so Windows builds can be tested before
+      # merging; the release workflow only uses artifacts from pushes to main.
+      - name: Package Windows release candidate
+        shell: pwsh
+        run: |
+          $packageName = "us-hr-custom-control-Windows-x64"
+          $packageDir = Join-Path "dist" $packageName
+          New-Item -ItemType Directory -Force -Path $packageDir | Out-Null
+          Copy-Item "target/release/us-hr-control.exe" $packageDir
+          Copy-Item "target/release/us-hr-cli.exe" $packageDir
+          Copy-Item "packaging/windows/collect-driver-info.ps1" $packageDir
+          Copy-Item "README.md" $packageDir
+          Copy-Item "LICENSE" $packageDir
+          Compress-Archive -Path $packageDir -DestinationPath "dist/$packageName.zip"
+      - name: Upload release candidate
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-candidate-Windows-x64
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+          path: dist/us-hr-custom-control-Windows-x64.zip
 
   dependencies:
     name: Dependency policy

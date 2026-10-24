@@ -366,10 +366,37 @@ pub struct Transport<C> {
     access_mode: AccessMode,
 }
 
-/// Protocol connection that uses libusb, the macOS and Linux backend.
-pub type UsbTransport = Transport<LibusbChannel>;
+/// Control channel chosen for the current platform and installed drivers.
+pub enum PlatformChannel {
+    /// Direct USB control transfers through libusb (macOS and Linux).
+    Libusb(LibusbChannel),
+    /// Vendor requests relayed by the TEAC Windows driver.
+    #[cfg(windows)]
+    TeacDriver(teac::TeacDriverChannel),
+}
 
-impl Transport<LibusbChannel> {
+impl ControlChannel for PlatformChannel {
+    fn send(&mut self, payload: &[u8]) -> Result<usize, ChannelError> {
+        match self {
+            Self::Libusb(channel) => channel.send(payload),
+            #[cfg(windows)]
+            Self::TeacDriver(channel) => channel.send(payload),
+        }
+    }
+
+    fn receive(&mut self, buffer: &mut [u8; MAX_MESSAGE_LEN]) -> Result<usize, ChannelError> {
+        match self {
+            Self::Libusb(channel) => channel.receive(buffer),
+            #[cfg(windows)]
+            Self::TeacDriver(channel) => channel.receive(buffer),
+        }
+    }
+}
+
+/// Protocol connection opened through the platform's control backend.
+pub type UsbTransport = Transport<PlatformChannel>;
+
+impl Transport<PlatformChannel> {
     /// Opens the first supported device in read-only mode.
     ///
     /// # Errors
@@ -387,6 +414,14 @@ impl Transport<LibusbChannel> {
     /// Returns an error if USB enumeration or opening fails, or if no supported
     /// interface is connected.
     pub fn open_first(access_mode: AccessMode) -> Result<Self, UsbError> {
+        #[cfg(windows)]
+        if let Some(transport) = teac::open_first(access_mode)? {
+            return Ok(transport);
+        }
+        Self::open_first_libusb(access_mode)
+    }
+
+    fn open_first_libusb(access_mode: AccessMode) -> Result<Self, UsbError> {
         let context = Context::new()?;
         let devices = context.devices()?;
         for device in devices.iter() {
@@ -411,7 +446,11 @@ impl Transport<LibusbChannel> {
                 manufacturer_string: handle.read_manufacturer_string_ascii(&descriptor).ok(),
                 serial_number: handle.read_serial_number_string_ascii(&descriptor).ok(),
             };
-            return Ok(Self::new(LibusbChannel { handle }, info, access_mode));
+            return Ok(Self::new(
+                PlatformChannel::Libusb(LibusbChannel { handle }),
+                info,
+                access_mode,
+            ));
         }
         Err(UsbError::NotFound)
     }
@@ -722,6 +761,80 @@ impl<C: ControlChannel> Transport<C> {
     }
 }
 
+#[cfg(windows)]
+pub use teac::TeacDriverChannel;
+
+#[cfg(windows)]
+mod teac {
+    //! Control channel through the TEAC driver installed by the TASCAM package.
+
+    use us_hr_core::{MAX_MESSAGE_LEN, REQUEST_RECEIVE, REQUEST_SEND};
+    use us_hr_windows::{ControlFile, control_interfaces};
+
+    use super::{
+        AccessMode, ChannelError, ControlChannel, DeviceInfo, PlatformChannel, Transport, UsbError,
+        UsbTransport, discover,
+    };
+
+    /// Vendor requests relayed by the TEAC driver's private control file.
+    pub struct TeacDriverChannel(ControlFile);
+
+    impl ControlChannel for TeacDriverChannel {
+        fn send(&mut self, payload: &[u8]) -> Result<usize, ChannelError> {
+            Ok(self.0.vendor_out(REQUEST_SEND, 0, 0, payload)?)
+        }
+
+        fn receive(&mut self, buffer: &mut [u8; MAX_MESSAGE_LEN]) -> Result<usize, ChannelError> {
+            Ok(self.0.vendor_in(REQUEST_RECEIVE, 0, 0, buffer)?)
+        }
+    }
+
+    /// Opens the first device served by the TEAC driver, if any.
+    ///
+    /// Returns `Ok(None)` when no TEAC driver interface is present, so the
+    /// caller can fall back to libusb.
+    pub fn open_first(access_mode: AccessMode) -> Result<Option<UsbTransport>, UsbError> {
+        let interfaces = match control_interfaces() {
+            Ok(interfaces) => interfaces,
+            Err(error) => {
+                tracing::warn!(%error, "could not enumerate TASCAM driver interfaces");
+                return Ok(None);
+            }
+        };
+        let Some(interface) = interfaces.into_iter().next() else {
+            return Ok(None);
+        };
+        let file = ControlFile::open(&interface.control_path).map_err(|source| {
+            UsbError::OpenDriverControl {
+                device: interface.model.display_name(),
+                source,
+            }
+        })?;
+        let info = discover()
+            .ok()
+            .and_then(|devices| {
+                devices
+                    .into_iter()
+                    .find(|device| device.model == interface.model)
+            })
+            .unwrap_or(DeviceInfo {
+                model: interface.model,
+                bus_number: 0,
+                address: 0,
+                usb_device_version: (0, 0, 0),
+                product_string: None,
+                manufacturer_string: None,
+                serial_number: None,
+            });
+        tracing::debug!(path = %interface.control_path, "opened TASCAM driver control file");
+        Ok(Some(Transport::new(
+            PlatformChannel::TeacDriver(TeacDriverChannel(file)),
+            info,
+            access_mode,
+        )))
+    }
+}
+
 /// USB discovery or control-transfer failure.
 #[derive(Debug, Error)]
 pub enum UsbError {
@@ -751,6 +864,18 @@ pub enum UsbError {
         /// Error reported by the active libusb backend.
         #[source]
         source: rusb::Error,
+    },
+    /// The TEAC Windows driver serves the device, but refused to open its
+    /// control file.
+    #[error(
+        "{device} was detected, but the TASCAM driver's control path could not be opened: {source}"
+    )]
+    OpenDriverControl {
+        /// Display name of the detected device.
+        device: &'static str,
+        /// Error reported by the operating system.
+        #[source]
+        source: io::Error,
     },
     /// A write was attempted through a read-only transport.
     #[error("device writes are disabled by the transport safety policy")]

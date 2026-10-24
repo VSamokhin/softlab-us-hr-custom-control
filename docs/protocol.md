@@ -116,13 +116,63 @@ panel maps its controls as follows:
   using the built-in Windows USB Audio 2 driver. The device enumerated as
   `0644:806f`, but libusb could not open it: the composite parent used
   `usbccgp`, its only function used `usbaudio2`, and neither exposed a
-  libusb-compatible control path. No status query or write was performed.
-  Rebinding the only function or composite parent to WinUSB would disable audio,
-  so functional Windows control requires a dedicated backend that coexists with
-  the TASCAM audio driver. Windows CI builds and release packages are disabled
-  until such a backend exists.
+  libusb-compatible control path. Rebinding the only function or composite
+  parent to WinUSB would disable audio. Control therefore goes through the TEAC
+  driver described under [Windows transport](#windows-transport). That backend
+  is implemented but has not been tested with hardware, so Windows release
+  packages remain disabled.
 
 The only hardware validation performed to date used a US-1x2HR reporting
 firmware 1.00 build 14. Readback of every modeled setting succeeded, and the
 write path was verified by reapplying broadcast volume 77 and reading 77 back.
 No status query or setting change has been tested on a US-2x2HR or US-4x4HR.
+
+## Windows transport
+
+Evidence: offline analysis of the official `TASCAM_US-HR_Installer_1.00.exe`
+(Inno Setup 5.5.7, signed by TEAC Corporation). The installer was unpacked
+without being run; all 33 files matched the installer's stored SHA-1 hashes.
+The findings below come from the driver INF, PE imports and exports, and a
+disassembly of `US-HR_SettingsPanel.exe` 1.0.0.0. **None of it has been
+exercised against hardware yet.**
+
+- The package installs TEAC's own AVStream/KMDF driver, `us-1x2hr.sys`
+  1.0.0.0 (INF `uac20.inf`, DriverVer 11/13/2020 for Windows 10, WHCP-signed).
+  It binds to `USB\VID_0644&PID_806F&MI_00`, `…PID_8070&MI_00` and
+  `…PID_8071&MI_00`, replacing `usbaudio2` on the audio function. It is not a
+  Thesycon TUSBAudio driver and ships no vendor API DLL.
+- The driver registers only the standard KS interface classes (AUDIO, RENDER,
+  CAPTURE, TOPOLOGY) with reference string `ksus1x2hr`. Its device SDDL grants
+  read/write to everyone, so no elevation is needed.
+- The Settings Panel imports `SetupDi*`, `CreateFileW` and `DeviceIoControl`
+  directly. It enumerates KSCATEGORY_RENDER
+  `{65E8773E-8F56-11D0-A3B9-00A0C9223196}`, replaces the interface path's
+  reference string with `\us-1x2hr`, and opens that path with
+  `GENERIC_READ | GENERIC_WRITE` and read/write sharing.
+- Every protocol transfer uses IOCTL `0x00222000`
+  (`CTL_CODE(FILE_DEVICE_UNKNOWN, 0x800, METHOD_BUFFERED, FILE_ANY_ACCESS)`).
+  The input buffer starts with this header:
+
+  | Offset | Size | Field | Host to device | Device to host |
+  |---:|---:|---|---|---|
+  | `0x00` | u32 | transfer direction | `0` | `1` |
+  | `0x04` | u32 | payload length | payload length | `0` |
+  | `0x08` | u16 | URB function | `0x0017` (`URB_FUNCTION_VENDOR_DEVICE`) | `0x0017` |
+  | `0x0a` | u16 | `wValue` | `0` | `0` |
+  | `0x0c` | u16 | `wIndex` | `0` | `0` |
+  | `0x0e` | u8 | reserved | `0` | `0` |
+  | `0x0f` | u8 | `bRequest` | `0x1d` | `0x1e` |
+  | `0x10` | n | payload | message bytes | none |
+
+  Inputs are padded to at least `0x14` bytes. Host-to-device requests pass no
+  output buffer; device-to-host requests receive the message in the output
+  buffer, whose size is the requested length. The panel calls the write
+  helper only with `bRequest` `0x1d` and the read helper only with `0x1e`, both
+  with `wValue` and `wIndex` zero. That matches the vendor requests above, so
+  the message format is unchanged.
+- Still unconfirmed: the exact meaning of header bytes `0x00` and `0x0e`
+  (inferred from `_URB_CONTROL_VENDOR_OR_CLASS_REQUEST` conventions), and
+  whether control requests are safe while the driver streams ASIO audio. The
+  ASIO DLL uses further private IOCTLs (`0x222028`–`0x222068`, `0x22603e`,
+  `0x22a041`, `0x22a054`) for streaming, buffer size and sample rate; they are
+  not decoded and are not used.

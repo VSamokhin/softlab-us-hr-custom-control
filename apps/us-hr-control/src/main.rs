@@ -22,8 +22,8 @@ const CONNECTION_RETRY_INTERVAL: Duration = Duration::from_secs(1);
 const CONNECTION_RETRY_LIMIT: u8 = 5;
 
 #[cfg(windows)]
-const DETECTED_WITHOUT_CONTROL: &str = "The interface was found, but Windows does not yet expose \
-     its control path to this application. See the README's Windows section.";
+const DETECTED_WITHOUT_CONTROL: &str = "The interface was found, but its control state could not \
+     be read. Install the TASCAM US-HR driver; see the README's Windows section.";
 #[cfg(not(windows))]
 const DETECTED_WITHOUT_CONTROL: &str =
     "The interface was found, but its control state could not be read.";

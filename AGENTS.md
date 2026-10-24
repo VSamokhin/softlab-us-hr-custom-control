@@ -19,8 +19,15 @@ project decision and a separate safety design.
   types, and the USB message codec. Keep this crate free of USB and GUI code.
 - `crates/us-hr-usb`: discovery, the backend-neutral `Transport<C:
   ControlChannel>` protocol layer (queries, setting writes, read-back
-  verification), and the libusb `ControlChannel`. New platform backends
-  implement `ControlChannel` only; do not duplicate protocol logic.
+  verification), and the libusb and TEAC-driver `ControlChannel`s. New
+  platform backends implement `ControlChannel` only; do not duplicate protocol
+  logic.
+- `crates/us-hr-windows`: TEAC Windows driver request encoding (safe, tested on
+  every platform) and the SetupAPI/IOCTL FFI (`cfg(windows)`). It is the only
+  crate allowed to contain `unsafe` code: its lints copy the workspace policy
+  with `unsafe_code = "deny"` instead of `forbid`, the FFI module opts in, and
+  every `unsafe` block needs a `SAFETY:` comment. Keep its lint lists in sync
+  with the workspace and keep FFI out of every other crate.
 - `apps/us-hr-cli`: read-only diagnostics and explicitly requested, scriptable
   setting changes.
 - `apps/us-hr-control`: egui/eframe desktop application, undo history, presets,
@@ -88,9 +95,10 @@ project decision and a separate safety design.
 - Keep both Wayland and X11 support enabled for Linux GUI builds.
 - Do not replace or rebind the Windows audio driver. ASIO buffer sizing belongs
   to the vendor driver and is not a portable device setting.
-- Do not publish Windows release packages until a dedicated backend can access
-  vendor controls without replacing the audio driver. Descriptor discovery was
-  validated on Windows, but control-path access is not functional. CI builds and
+- Windows control goes through the official TEAC driver's private control
+  file and vendor-request IOCTL (see `docs/protocol.md`). Never install,
+  replace, or rebind drivers from this project. Do not publish Windows release
+  packages until that backend has been validated with real hardware. CI builds and
   tests Windows and uploads a `windows-preview-x64` artifact; keep its name
   outside the `release-candidate-*` pattern used by the release workflow.
 - When adding dependencies, prefer portable Rust crates, avoid wildcard

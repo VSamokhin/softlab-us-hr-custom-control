@@ -6,9 +6,9 @@ status queries and setting changes.
 
 The project does **not** replace an audio driver. It controls the interface's
 internal mixer and device settings over vendor-specific USB control transfers.
-macOS and Linux use their standard USB-audio stacks. Windows control is not
-supported yet: CI builds and tests Windows as a preview artifact, but no
-Windows release package is published.
+macOS and Linux use their standard USB-audio stacks. Windows control goes
+through the official TASCAM driver; it is implemented but not yet validated
+with hardware, so CI builds Windows only as a preview artifact.
 
 The reverse-engineering findings and command map are documented in
 [`docs/protocol.md`](docs/protocol.md).
@@ -32,9 +32,8 @@ The reverse-engineering findings and command map are documented in
   been tested and must not be assumed to be compatible.
 - macOS arm64 is the only platform tested at runtime with real hardware. The
   Linux x64 build compiles in CI, but has not been runtime-tested or
-  hardware-validated. Windows releases are disabled because the available USB
-  backend cannot open the device control path without replacing the audio
-  driver.
+  hardware-validated. Windows releases are disabled until the TASCAM-driver
+  backend has been validated with real hardware.
 
 Firmware updating is intentionally out of scope until the ordinary settings
 protocol is complete and thoroughly tested.
@@ -133,31 +132,33 @@ tag rather than making the device world-writable.
 
 ### Windows
 
-Windows control is not functional yet, so no Windows release package is
-published. CI builds, lints, and tests the workspace on Windows x64 and uploads
-the result as a `windows-preview-x64` workflow artifact for development and
-diagnostics only. The preview release executable is a windowed application
-with the embedded application icon; debug builds keep a console for logs.
+Windows control requires the official TASCAM US-HR driver (TEAC
+`us-1x2hr.sys`, installed by `TASCAM_US-HR_Installer_1.00.exe`). With Windows'
+built-in USB Audio 2 driver the interface is detected, but no application can
+send it vendor control requests, so the GUI reports it as detected without
+control and the CLI's `inspect` fails.
 
-The Windows x64 build has been launched with a connected US-1x2HR using the
-built-in Windows USB Audio 2 driver. Device-descriptor discovery succeeds, but
-the libusb backend cannot open the vendor-control path because the device is
-bound only to the `usbccgp` and `usbaudio2` drivers. The GUI therefore reports
-the interface as detected but cannot read or change its control state.
+When the TASCAM driver is installed, the application talks to the device the
+same way the official Settings Panel does: it finds the driver's render
+interface, opens the driver's private `us-1x2hr` control file, and relays the
+same 64-byte vendor messages used on macOS and Linux through the driver's
+vendor-request IOCTL. Audio keeps running through the TASCAM driver; this
+application never installs, replaces, or rebinds drivers. The transport is
+documented in [`docs/protocol.md`](docs/protocol.md#windows-transport).
+
+**The Windows backend has not yet been validated with real hardware.** It is
+built from analysis of the official installer and covered by unit tests only,
+so no Windows release package is published. CI builds, lints, and tests the
+workspace on Windows x64 and uploads a `windows-preview-x64` workflow artifact.
+The preview release executable is a windowed application with the embedded
+application icon; debug builds keep a console for logs.
 
 Do not replace the audio function or composite parent with a generic WinUSB
 driver: doing so would prevent Windows from using the interface for audio.
-Windows control support needs a dedicated backend that can coexist with the
-TASCAM audio driver. The protocol layer accepts any `ControlChannel`
-implementation, so such a backend only has to carry the 64-byte vendor messages;
-readiness polling, write policy, and read-back verification are shared with
-macOS and Linux. Installing the official TASCAM package provides its own driver
-and Settings Panel, but compatibility with that driver's private control
-interface has not yet been implemented in this project.
 
-To help that work, `packaging/windows/collect-driver-info.ps1` reports the
-drivers, device interfaces, and TASCAM software associated with a connected
-interface. It only reads device properties and the registry:
+`packaging/windows/collect-driver-info.ps1` reports the drivers, device
+interfaces, and TASCAM software associated with a connected interface. It only
+reads device properties and the registry:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File packaging\windows\collect-driver-info.ps1 > us-hr-driver-info.txt
@@ -166,8 +167,10 @@ powershell -ExecutionPolicy Bypass -File packaging\windows\collect-driver-info.p
 ## Structure
 
 - `crates/us-hr-core`: platform-independent model and message codec.
-- `crates/us-hr-usb`: backend-neutral protocol transport, the libusb control
-  channel, and typed US-HR operations.
+- `crates/us-hr-usb`: backend-neutral protocol transport, the libusb and TEAC
+  driver control channels, and typed US-HR operations.
+- `crates/us-hr-windows`: TEAC driver request encoding and the Windows FFI;
+  the only crate that permits `unsafe` code.
 - `apps/us-hr-cli`: diagnostics and scriptable settings.
 - `apps/us-hr-control`: native desktop UI using egui/eframe.
 

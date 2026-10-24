@@ -2714,6 +2714,15 @@ dependencies = [
  "thiserror 2.0.21",
  "tracing",
  "us-hr-core",
+ "us-hr-windows",
+]
+
+[[package]]
+name = "us-hr-windows"
+version = "0.1.0"
+dependencies = [
+ "us-hr-core",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

@@ -119,8 +119,8 @@ panel maps its controls as follows:
   libusb-compatible control path. Rebinding the only function or composite
   parent to WinUSB would disable audio. Control therefore goes through the TEAC
   driver described under [Windows transport](#windows-transport). Status
-  reads through that backend were validated on 2026-10-24 (see below); writes
-  have not been tested on Windows, so Windows release packages remain disabled.
+  reads and a verified write through that backend were validated on
+  2026-10-24 (see below). Windows release packages remain disabled.
 
 The only hardware validation performed to date used a US-1x2HR reporting
 firmware 1.00 build 14. Readback of every modeled setting succeeded, and the
@@ -135,15 +135,18 @@ without being run; all 33 files matched the installer's stored SHA-1 hashes.
 The findings below come from the driver INF, PE imports and exports, and a
 disassembly of `US-HR_SettingsPanel.exe` 1.0.0.0.
 
-**Hardware validation (read-only, 2026-10-24):** Windows 11 Pro build 26300 x64,
+**Hardware validation (2026-10-24):** Windows 11 Pro build 26300 x64,
 US-1x2HR firmware 1.00 build 14 (build date `Sep  2 2020 17:42:40`), with the
 TASCAM Windows 10 driver package installed (`us-1x2hr` service, driver version
 13.49.20.427, 05/18/2020; the composite parent stays on `usbccgp`). The backend
 opened `…{65e8773e-8f56-11d0-a3b9-00a0c9223196}\us-1x2hr`, and `status` read
 the firmware identity, sample rate (44.1 kHz), and every modeled setting
 without errors in about 175 ms; the GUI showed the same state. Readiness
-replies carried field `0xa1` as `u16`. No write was sent, and the audio
-endpoints stayed present.
+replies carried field `0xa1` as `u16`. The write path was then verified by
+reapplying broadcast volume 70 (its current value) and reading 70 back; a
+following status matched the earlier one in every field. Because the value did
+not change, this proves the write direction is accepted, not that a different
+value takes effect. The audio endpoints stayed present throughout.
 
 - The package installs TEAC's own AVStream/KMDF driver, `us-1x2hr.sys`
   1.0.0.0 (INF `uac20.inf`, DriverVer 05/18/2020, 13.49.20.427, for Windows 10, WHCP-signed).
@@ -179,7 +182,7 @@ endpoints stayed present.
   helper only with `bRequest` `0x1d` and the read helper only with `0x1e`, both
   with `wValue` and `wIndex` zero. That matches the vendor requests above, so
   the message format is unchanged.
-- The header layout is confirmed for reads by the validation above. Still
+- The header layout is confirmed for reads and writes by the validation above. Still
   unconfirmed: the exact meaning of header bytes `0x00` and `0x0e`
   (inferred from `_URB_CONTROL_VENDOR_OR_CLASS_REQUEST` conventions), and
   whether control requests are safe while the driver streams ASIO audio. The

@@ -7,8 +7,8 @@ status queries and setting changes.
 The project does **not** replace an audio driver. It controls the interface's
 internal mixer and device settings over vendor-specific USB control transfers.
 macOS and Linux use their standard USB-audio stacks. Windows control goes
-through the official TASCAM driver; status reads are hardware-validated, but
-writes are not yet, so CI builds Windows only as a preview artifact.
+through the official TASCAM driver; it is hardware-validated, but CI builds
+Windows only as a preview artifact for now.
 
 The reverse-engineering findings and command map are documented in
 [`docs/protocol.md`](docs/protocol.md).
@@ -32,9 +32,9 @@ The reverse-engineering findings and command map are documented in
   been tested and must not be assumed to be compatible.
 - macOS arm64 is the only platform tested at runtime with real hardware. The
   Linux x64 build compiles in CI, but has not been runtime-tested or
-  hardware-validated. On Windows 11 x64 with the TASCAM driver, status reads
-  have been validated with real hardware; writes have not, so Windows releases
-  remain disabled.
+  hardware-validated. Windows 11 x64 with the TASCAM driver has been tested
+  with real hardware (status reads and one verified write); Windows release
+  packages are not published yet.
 
 Firmware updating is intentionally out of scope until the ordinary settings
 protocol is complete and thoroughly tested.
@@ -147,10 +147,10 @@ vendor-request IOCTL. Audio keeps running through the TASCAM driver; this
 application never installs, replaces, or rebinds drivers. The transport is
 documented in [`docs/protocol.md`](docs/protocol.md#windows-transport).
 
-**Windows validation is read-only so far.** With the TASCAM driver installed on
-Windows 11 x64, the CLI's `list`, `inspect`, and `status` and the GUI read the
-complete device state of a US-1x2HR. No setting change has been tested on
-Windows yet, so no Windows release package is published. CI builds, lints, and tests the
+With the TASCAM driver installed on Windows 11 x64, the CLI and the GUI read the
+complete device state of a US-1x2HR, and a verified write (reapplying broadcast
+volume 70) succeeded. Changing a setting to a different value has not yet been
+tested on Windows, and no Windows release package is published yet. CI builds, lints, and tests the
 workspace on Windows x64 and uploads a `windows-preview-x64` workflow artifact.
 The preview release executable is a windowed application with the embedded
 application icon; debug builds keep a console for logs.

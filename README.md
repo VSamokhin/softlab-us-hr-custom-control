@@ -1,5 +1,15 @@
 # US-HR Custom Control
 
+## Why this project exists
+
+The main goal is to keep the TASCAM US-HR interfaces fully usable on **macOS**.
+TASCAM's original Settings Panel no longer appears to be maintained: on macOS it
+is an older Intel-only application, so it may stop working on new macOS
+versions. This project replaces it with a native, maintained control panel.
+Linux and Windows support follow from the same cross-platform code.
+
+## Overview
+
 An independent, cross-platform control application for the TASCAM US-HR USB
 audio-interface family. Only the US-1x2HR is currently supported and tested for
 status queries and setting changes.

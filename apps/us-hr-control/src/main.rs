@@ -551,10 +551,13 @@ fn status_bar(ui: &mut egui::Ui, app: &ControlApp) {
         ui.label(egui::RichText::new(message).size(11.5).color(theme::TEXT));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.label(
-                egui::RichText::new("US-HR CUSTOM CONTROL  ·  0.1.0")
-                    .size(9.5)
-                    .strong()
-                    .color(theme::TEXT_MUTED),
+                egui::RichText::new(concat!(
+                    "US-HR CUSTOM CONTROL  ·  ",
+                    env!("CARGO_PKG_VERSION")
+                ))
+                .size(9.5)
+                .strong()
+                .color(theme::TEXT_MUTED),
             );
         });
     });

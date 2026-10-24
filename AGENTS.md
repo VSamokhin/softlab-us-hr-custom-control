@@ -186,7 +186,11 @@ not only a debug build.
     dependencies, refactors without behavior changes).
 - Bump once per pull request, in that pull request, according to its largest
   change. Keep the `version` requirements on internal path dependencies in the
-  crate manifests in step with the workspace version and update `Cargo.lock`.
+  crate manifests and `CFBundleShortVersionString` in
+  `packaging/macos/Info.plist` in step with the workspace version, and update
+  `Cargo.lock`. The GUI reads its displayed version from `CARGO_PKG_VERSION`.
+- CI's version-policy job fails a pull request to `main` whose version is not
+  higher than `main`'s, or whose macOS bundle version does not match.
 - The release workflow tags the workspace version and skips a release
   candidate whose version is not newer than the latest tag.
 

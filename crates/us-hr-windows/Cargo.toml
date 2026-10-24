@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-us-hr-core = { path = "../us-hr-core", version = "0.1.0" }
+us-hr-core = { path = "../us-hr-core", version = "0.2.0" }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true }

@@ -9,10 +9,10 @@ license.workspace = true
 rusb.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-us-hr-core = { path = "../us-hr-core", version = "0.1.0" }
+us-hr-core = { path = "../us-hr-core", version = "0.2.0" }
 
 [target.'cfg(windows)'.dependencies]
-us-hr-windows = { path = "../us-hr-windows", version = "0.1.0" }
+us-hr-windows = { path = "../us-hr-windows", version = "0.2.0" }
 
 [lints]
 workspace = true

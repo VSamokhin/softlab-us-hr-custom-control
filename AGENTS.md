@@ -174,6 +174,22 @@ The raw `target/release/us-hr-control` file is a Unix executable, not the item a
 macOS user should double-click. After UI work, inspect the packaged application,
 not only a debug build.
 
+## Versioning
+
+- Every change delivered to `main` must increase the application version in
+  `[workspace.package]` in `Cargo.toml`. Use semantic versioning
+  (`MAJOR.MINOR.PATCH`):
+  - MAJOR: significant changes only, and only after the project owner has
+    explicitly approved the major release. Never bump MAJOR on your own.
+  - MINOR: new features; reset PATCH to zero.
+  - PATCH: bug fixes, chores, and housekeeping (documentation, CI,
+    dependencies, refactors without behavior changes).
+- Bump once per pull request, in that pull request, according to its largest
+  change. Keep the `version` requirements on internal path dependencies in the
+  crate manifests in step with the workspace version and update `Cargo.lock`.
+- The release workflow tags the workspace version and skips a release
+  candidate whose version is not newer than the latest tag.
+
 ## Documentation and hand-off
 
 - Update `docs/protocol.md` with any protocol discovery, mapping correction, or

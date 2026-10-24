@@ -2673,7 +2673,7 @@ dependencies = [
 
 [[package]]
 name = "us-hr-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2685,7 +2685,7 @@ dependencies = [
 
 [[package]]
 name = "us-hr-control"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "eframe",
  "serde",
@@ -2699,7 +2699,7 @@ dependencies = [
 
 [[package]]
 name = "us-hr-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "proptest",
  "serde",
@@ -2708,7 +2708,7 @@ dependencies = [
 
 [[package]]
 name = "us-hr-usb"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "rusb",
  "thiserror 2.0.21",
@@ -2719,7 +2719,7 @@ dependencies = [
 
 [[package]]
 name = "us-hr-windows"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "us-hr-core",
  "windows-sys 0.61.2",

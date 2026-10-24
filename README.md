@@ -6,8 +6,22 @@ status queries and setting changes.
 
 The project does **not** replace an audio driver. It controls the interface's
 internal mixer and device settings over vendor-specific USB control transfers.
-macOS and Linux use their standard USB-audio stacks. Windows control goes
-through the official TASCAM driver, which must be installed first.
+macOS and Linux use their standard USB-audio stacks.
+
+## Requirements
+
+| Platform | Required before use |
+|---|---|
+| macOS | Nothing beyond the operating system's built-in USB audio support. |
+| Linux | The udev rule in `packaging/linux/99-tascam-us-hr.rules` (see [Linux permissions](#linux-permissions)). |
+| **Windows** | **The official TASCAM US-HR driver** ("US-HR Series Driver", `TASCAM_US-HR_Installer_1.00.exe` from TASCAM's US-1x2HR download page). |
+
+> **Windows:** this application cannot control the interface without the
+> TASCAM driver. With Windows' built-in USB audio driver the interface still
+> plays audio and is detected, but its settings cannot be read or changed.
+> The application never installs or replaces drivers itself; install the
+> TASCAM package first (administrator rights are needed once for that
+> installation, not for this application). See [Windows](#windows).
 
 The reverse-engineering findings and command map are documented in
 [`docs/protocol.md`](docs/protocol.md).
@@ -131,7 +145,8 @@ tag rather than making the device world-writable.
 
 ### Windows
 
-Windows control requires the official TASCAM US-HR driver (TEAC
+**Requirement: the official TASCAM US-HR driver must be installed.** Windows
+control requires that driver (TEAC
 `us-1x2hr.sys`, installed by `TASCAM_US-HR_Installer_1.00.exe`). With Windows'
 built-in USB Audio 2 driver the interface is detected, but no application can
 send it vendor control requests, so the GUI reports it as detected without
@@ -187,8 +202,10 @@ platform build as its own artifact.
 Every successful `main` branch CI run is eligible to become a release
 candidate. The serialized release workflow checks that no tagged draft release
 is awaiting a decision, then creates an annotated semantic-version tag for the
-tested commit. The first automatically generated tag uses the workspace version
-from `Cargo.toml`; later candidates increment its patch component.
+tested commit. The tag is the `[workspace.package]` version from `Cargo.toml`.
+That version must increase with every delivery to `main` (see
+[Versioning](#versioning)); if it is not newer than the latest tag, the release
+workflow records why and creates no candidate.
 
 The CI workflow builds and packages that exact commit for every platform. After
 all CI jobs pass, the release workflow reuses those immutable workflow
@@ -213,6 +230,17 @@ points at the same commit.
 Creating or publishing a draft does not imply runtime or hardware validation of
 the Linux package. The Windows package has been validated only as described in
 the Windows section and requires the TASCAM driver.
+
+### Versioning
+
+The application uses semantic versioning, `MAJOR.MINOR.PATCH`, set once in
+`[workspace.package]` in `Cargo.toml`. Every change delivered to `main`
+increases it:
+
+- **MAJOR** for significant changes, and only with the project owner's
+  explicit approval;
+- **MINOR** for new features, resetting PATCH to zero;
+- **PATCH** for bug fixes, chores, and housekeeping.
 
 ## Safety
 

@@ -124,8 +124,9 @@ jobs:
           [System.Management.Automation.Language.Parser]::ParseFile(
             "packaging/windows/collect-driver-info.ps1", [ref]$null, [ref]$errors) | Out-Null
           if ($errors) { $errors | ForEach-Object { Write-Error $_.Message }; exit 1 }
+      # Packaged on pull requests too, so Windows builds can be tested before
+      # merging; the release workflow only uses artifacts from pushes to main.
       - name: Package Windows release candidate
-        if: github.event_name == 'push'
         shell: pwsh
         run: |
           $packageName = "us-hr-custom-control-Windows-x64"
@@ -138,7 +139,6 @@ jobs:
           Copy-Item "LICENSE" $packageDir
           Compress-Archive -Path $packageDir -DestinationPath "dist/$packageName.zip"
       - name: Upload release candidate
-        if: github.event_name == 'push'
         uses: actions/upload-artifact@v7
         with:
           name: release-candidate-Windows-x64
